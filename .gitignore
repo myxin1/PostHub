@@ -1,0 +1,9 @@
+backend/.venv/
+backend/.pyuserbase/
+backend/posthub.db
+backend/.posthub_key
+**/__pycache__/
+*.pyc
+.env
+.env.*
+.DS_Store
