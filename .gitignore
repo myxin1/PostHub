@@ -1,9 +1,36 @@
+# Python
 backend/.venv/
 backend/.pyuserbase/
-backend/posthub.db
-backend/.posthub_key
 **/__pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Banco de dados local
+backend/posthub.db
+backend/*.db
+*.db
+
+# Segredos e credenciais
+backend/.posthub_key
 .env
 .env.*
+!.env.example
+
+# Logs e runtime
+backend/server.log
+*.log
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Vercel
+.vercel
+
+# IDE
+.vscode/
+.idea/
