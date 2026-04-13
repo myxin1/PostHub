@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid as _uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -8,7 +10,7 @@ from authlib.integrations.starlette_client import OAuth
 
 from app.api.deps import get_db
 from app.config import settings
-from app.models import User
+from app.models import User, UserRole
 from app.security import create_access_token
 
 
@@ -63,7 +65,21 @@ async def google_callback(request: Request, db=Depends(get_db)):
         return RedirectResponse("/app/login?msg=Falha+no+login+Google", status_code=status.HTTP_302_FOUND)
     user = db.scalar(select(User).where(User.email == email))
     if not user:
-        return RedirectResponse("/app/login?msg=Acesso+negado.+Usuário+não+cadastrado.", status_code=status.HTTP_302_FOUND)
+        # Auto-create user on first Google login
+        import datetime
+        user = User(
+            id=str(_uuid.uuid4()),
+            email=email,
+            access_id=email.split("@")[0][:32],
+            password_hash="",
+            must_set_password=False,
+            role=UserRole.USER,
+            timezone="UTC",
+            created_at=datetime.datetime.utcnow(),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
     access_token = create_access_token(subject=user.id, role=user.role.value)
     resp = RedirectResponse("/app", status_code=status.HTTP_302_FOUND)
     resp.set_cookie("access_token", access_token, httponly=True, samesite="lax")
