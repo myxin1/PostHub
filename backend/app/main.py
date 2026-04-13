@@ -158,7 +158,7 @@ def _seed_admin_user() -> None:
         conn.execute(
             text(
                 "INSERT INTO users (id, email, access_id, password_hash, must_set_password, role, timezone, created_at) "
-                "VALUES (:id, :email, :access_id, :password_hash, 0, :role, 'UTC', :created_at)"
+                "VALUES (:id, :email, :access_id, :password_hash, false, :role, 'UTC', :created_at)"
             ),
             {
                 "id": str(__import__("uuid").uuid4()),
