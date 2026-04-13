@@ -1023,7 +1023,7 @@ def _get_or_create_single_bot(db, *, user: User) -> AutomationProfile:
     )
     if bot:
         return bot
-    # Nenhum ativo — pega o primeiro e o marca ativo
+    # Nenhum ativo — retorna o primeiro sem forçar ativação
     bot = db.scalar(
         select(AutomationProfile)
         .where(AutomationProfile.user_id == uid)
@@ -1031,9 +1031,6 @@ def _get_or_create_single_bot(db, *, user: User) -> AutomationProfile:
         .limit(1)
     )
     if bot:
-        db.execute(update(AutomationProfile).where(AutomationProfile.user_id == uid).values(active=False))
-        bot.active = True
-        db.add(bot); db.commit(); db.refresh(bot)
         return bot
     # Nenhum perfil — cria o primeiro
     bot = AutomationProfile(
@@ -1772,12 +1769,42 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
 
     # _ph definido no nível de módulo
 
-    body = _NEW_BOT_WIZARD_HTML + f"""
+    import random as _random
+    _sleep_msgs = [
+        ("😴", "zzZZ... todos os bots tirando uma soneca."),
+        ("🛌", "Hora do descanso. Seus robôs estão off."),
+        ("💤", "Silêncio total. Nem um post saindo por aqui."),
+        ("🌙", "Modo noturno ativado. Bots desligados."),
+        ("🧸", "Os robôs foram dormir. Desligue a luz."),
+        ("☕", "Sem robô ativo. Hora do café enquanto isso."),
+        ("🌑", "Escuridão total nos servidores. Ninguém em casa."),
+        ("🐢", "Mais devagar que uma tartaruga... porque não tem ninguém rodando."),
+        ("📻", "...apenas estática. Nenhum robô no ar."),
+        ("🎭", "Robôs de férias. Destino: desconhecido."),
+    ]
+    _sleep_icon, _sleep_text = _random.choice(_sleep_msgs)
 
-    {_ph("active-project-banner")}
+    if active_count == 0:
+        _active_banner = f"""
+    <div class="active-project-banner" style="margin-bottom:14px;border-color:var(--border);background:var(--surface);opacity:.85">
+      <div style="display:flex;align-items:center;gap:14px">
+        <div style="font-size:36px;line-height:1;filter:grayscale(40%)">{_sleep_icon}</div>
+        <div>
+          <div class="active-project-label" style="color:var(--muted)">Nenhum robô ativo</div>
+          <div class="active-project-name" style="font-size:17px;color:var(--muted);font-weight:600">{_sleep_text}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px">Ligue um robô na tabela abaixo para começar.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn secondary" style="font-size:13px;padding:7px 14px" type="button"
+          onclick="openWizard()">+ Novo Projeto</button>
+      </div>
+    </div>"""
+    else:
+        _active_banner = f"""
     <div class="active-project-banner" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:12px">
-        <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--primary),var(--pink));display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">{html.escape((bot.publish_config_json or {}).get('emoji') or '🤖')}</div>
+        <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--primary),var(--pink));display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">{html.escape((bot.publish_config_json or {{}}).get('emoji') or '🤖')}</div>
         <div>
           <div class="active-project-label">Projeto ativo</div>
           <div class="active-project-name">{html.escape(bot.name)}</div>
@@ -1796,7 +1823,12 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
           onclick="openWizard()">+ Novo Projeto</button>
         <a href="/app/profiles/{bot.id}?tab=integracoes" class="btn secondary" style="font-size:13px;padding:7px 14px">⚙ Configurar</a>
       </div>
-    </div>
+    </div>"""
+
+    body = _NEW_BOT_WIZARD_HTML + f"""
+
+    {_ph("active-project-banner")}
+    {_active_banner}
 
     {_ph("secao-projetos-robos")}
     <div class="card" style="margin-bottom:14px">
@@ -2079,13 +2111,6 @@ def robot_toggle(profile_id: str, user: User = Depends(get_current_user), db=Dep
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if p.active:
-        # Desligar: só permite se houver outro ativo
-        other_active = db.scalar(
-            select(func.count()).select_from(AutomationProfile)
-            .where(AutomationProfile.user_id == user.id, AutomationProfile.active.is_(True), AutomationProfile.id != profile_id)
-        ) or 0
-        if other_active == 0:
-            return RedirectResponse(f"/app/robot?msg={quote_plus('Mantenha ao menos 1 robô ativo.')}", status_code=status.HTTP_302_FOUND)
         p.active = False
         db.add(p); db.commit()
         return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
