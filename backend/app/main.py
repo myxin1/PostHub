@@ -38,15 +38,28 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup():
-        Base.metadata.create_all(bind=engine)
-        _sqlite_auto_migrate()
-        _seed_admin_user()
-        if os.getenv("POSTHUB_INLINE_WORKER", "1") == "1":
+        try:
+            Base.metadata.create_all(bind=engine)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger("posthub").warning("DB create_all failed: %s", exc)
+        try:
+            _sqlite_auto_migrate()
+        except Exception:
+            pass
+        try:
+            _seed_admin_user()
+        except Exception:
+            pass
+        if os.getenv("POSTHUB_INLINE_WORKER", "0") == "1":
             worker_id = f"inline:{socket.gethostname()}:{os.getpid()}"
 
             async def loop():
                 while True:
-                    did_work = await asyncio.to_thread(run_worker_tick, worker_id=worker_id)
+                    try:
+                        did_work = await asyncio.to_thread(run_worker_tick, worker_id=worker_id)
+                    except Exception:
+                        did_work = False
                     await asyncio.sleep(0.2 if did_work else 1.0)
 
             asyncio.create_task(loop())

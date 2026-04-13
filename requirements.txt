@@ -15,4 +15,4 @@ python-multipart
 google-generativeai
 authlib
 itsdangerous
-psycopg2-binary
+pg8000

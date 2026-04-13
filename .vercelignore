@@ -1,0 +1,5 @@
+backend/.venv/
+backend/.pyuserbase/
+**/__pycache__/
+*.pyc
+deploy.sh
