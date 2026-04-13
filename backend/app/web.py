@@ -636,7 +636,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           </div>
           <div style="display:inline-flex;gap:4px;align-items:center">
             <button id="ph-restore-btn" title="Mostrar todos os placeholders" onclick="localStorage.removeItem('ph-hidden');document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.style.display='inline-flex'}})" style="background:none;border:1px dashed rgba(245,158,11,.5);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#f59e0b;white-space:nowrap">📌 Placeholders</button>
-            <button title="Remover todos os placeholders" onclick="localStorage.setItem('ph-hidden','1');document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.remove()}})" style="background:none;border:1px dashed rgba(239,68,68,.4);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#ef4444;white-space:nowrap">✕ Remover todos</button>
+            <button title="Ocultar todos os placeholders" onclick="localStorage.setItem('ph-hidden','1');document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.style.display='none'}})" style="background:none;border:1px dashed rgba(239,68,68,.4);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#ef4444;white-space:nowrap">✕ Remover todos</button>
           </div>
           <select class="theme-select" id="theme-select">
             <option value="roxo">🌙 Roxo</option>
@@ -838,7 +838,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     // ── Placeholder visibility persistence ──────────────────────────────────
     (function() {{
       if (localStorage.getItem('ph-hidden') === '1') {{
-        document.querySelectorAll('.dev-ph-wrap').forEach(function(el) {{ el.remove(); }});
+        document.querySelectorAll('.dev-ph-wrap').forEach(function(el) {{ el.style.display='none'; }});
       }}
     }})();
   </script>
