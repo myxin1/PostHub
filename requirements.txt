@@ -16,3 +16,4 @@ google-generativeai
 authlib
 itsdangerous
 pg8000
+bcrypt
