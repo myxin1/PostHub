@@ -150,10 +150,11 @@ def _seed_admin_user() -> None:
             {"email": email},
         ).fetchone()
         if row:
-            if row[1] != UserRole.ADMIN.value:
-                conn.execute(text("UPDATE users SET role = :role WHERE email = :email"), {"role": UserRole.ADMIN.value, "email": email})
-            if not row[2]:
-                conn.execute(text("UPDATE users SET access_id = :access_id WHERE email = :email"), {"access_id": login_id, "email": email})
+            # Always sync role, access_id and password from env vars
+            conn.execute(
+                text("UPDATE users SET role = :role, access_id = :access_id, password_hash = :pw WHERE email = :email"),
+                {"role": UserRole.ADMIN.value, "access_id": login_id, "pw": hash_password(password), "email": email},
+            )
             return
         conn.execute(
             text(
