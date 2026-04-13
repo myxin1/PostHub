@@ -746,13 +746,21 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           var icon = n.type === 'success'
             ? '<span class="notif-icon ok">✓</span>'
             : '<span class="notif-icon err">✕</span>';
-          var link = n.wp_url
-            ? '<a href="' + n.wp_url + '" target="_blank" rel="noopener" style="color:var(--primary);font-size:11px;text-decoration:none">Ver post</a>'
+          var link = n.type === 'success' && n.wp_url
+            ? '<a href="' + n.wp_url + '" target="_blank" rel="noopener" style="color:#10b981;font-size:11px;font-weight:600;text-decoration:none">Ver post</a>'
             : '';
+          var errLine = '';
+          if (n.type === 'error' && n.error_label) {{
+            var fixPart = n.fix_url
+              ? ' <a href="' + _esc(n.fix_url) + '" style="color:#ef4444;font-weight:600;text-decoration:none">→ Corrigir</a>'
+              : '';
+            errLine = '<div style="font-size:11px;color:#ef4444;margin-top:3px;font-weight:600">' + _esc(n.error_label) + fixPart + '</div>';
+          }}
           return '<div class="notif-item">' + icon +
             '<div class="notif-item-text">' +
               '<div class="notif-item-title">' + _esc(n.title) + '</div>' +
               '<div class="notif-item-sub">' + _esc(n.bot) + ' · ' + _esc(n.when) + (link ? ' · ' + link : '') + '</div>' +
+              errLine +
             '</div></div>';
         }}).join('');
       }}
@@ -3685,7 +3693,122 @@ def admin_users_delete(user_id: str, _admin: User = Depends(require_admin), db=D
 
 # ─────────────────────────── NOTIFICATIONS ────────────────────────────────
 
+import re as _re  # noqa: E402
 from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
+
+
+def _translate_error(code: str) -> tuple[str, str, str]:
+    """Return (label, fix_suggestion, fix_url) for a given error code string."""
+    c = str(code or "").lower().strip()
+
+    # ── WordPress errors ──────────────────────────────────────────────────
+    if "missing_wordpress_integration" in c:
+        return (
+            "WordPress não configurado",
+            "Nenhuma integração WordPress foi encontrada para este bot. Adicione a URL, usuário e senha de aplicativo nas integrações.",
+            "/app/bot",
+        )
+    if "invalid_wordpress_credentials" in c:
+        return (
+            "Credenciais WordPress inválidas",
+            "A URL base, o usuário ou a Senha de Aplicativo do WordPress estão incorretos ou vazios. Acesse as integrações do bot, edite o WordPress e preencha todos os campos corretamente.",
+            "/app/bot",
+        )
+    if "post_create_failed:401" in c or "401" in c:
+        return (
+            "Autenticação WordPress recusada (HTTP 401)",
+            "A Senha de Aplicativo está errada ou foi revogada. No WordPress acesse: Usuários → seu perfil → role até 'Senhas de Aplicativo' → gere uma nova e cole nas integrações.",
+            "/app/bot",
+        )
+    if "post_create_failed:403" in c or "403" in c:
+        return (
+            "Sem permissão para publicar (HTTP 403)",
+            "O usuário WordPress não tem permissão de Autor ou Editor. No WordPress vá em Usuários → edite o usuário → altere o Perfil para Autor ou Editor.",
+            "/app/bot",
+        )
+    if "post_create_failed:404" in c or "404" in c:
+        return (
+            "API REST do WordPress não encontrada (HTTP 404)",
+            "A URL base está incorreta ou a API REST está desativada. Verifique se a URL termina sem barra (ex: https://seusite.com) e se o WordPress está acessível.",
+            "/app/bot",
+        )
+    if "post_create_failed" in c:
+        m = _re.search(r":(\d{3}):", c)
+        code_n = m.group(1) if m else "?"
+        return (
+            f"Erro ao criar post no WordPress (HTTP {code_n})",
+            f"O WordPress retornou o código de erro {code_n}. Verifique as credenciais, a URL base e se o site está online.",
+            "/app/bot",
+        )
+    if "media_upload_failed" in c:
+        return (
+            "Falha ao enviar imagem para o WordPress",
+            "O upload da imagem destaque falhou. Verifique se o usuário tem permissão de upload e se o site tem espaço em disco.",
+            "/app/bot",
+        )
+    if "missing_wordpress_output" in c:
+        return (
+            "IA não gerou conteúdo para o WordPress",
+            "O comando da IA não produziu texto para o site. Verifique se o prompt do WordPress está preenchido nas configurações de IA do bot.",
+            "/app/bot",
+        )
+    if "wordpress_output_too_short" in c:
+        return (
+            "Conteúdo gerado pela IA é muito curto",
+            "O texto gerado tem menos de 120 caracteres. Melhore o prompt da IA para gerar artigos mais completos.",
+            "/app/bot",
+        )
+    if "duplicate_detected" in c:
+        return (
+            "Post duplicado — ignorado automaticamente",
+            "Um post com título ou URL muito similar já foi publicado. O sistema buscará novo conteúdo automaticamente.",
+            "",
+        )
+
+    # ── Gemini / IA errors ────────────────────────────────────────────────
+    if "rate_limited" in c:
+        return (
+            "Limite de requisições da API Gemini atingido",
+            "A API gratuita do Gemini tem cota diária. O sistema tentará novamente em breve. Se isso ocorrer com frequência, considere usar um modelo diferente.",
+            "/app/bot",
+        )
+    if "gemini" in c or "missing_gemini" in c or "invalid_api_key" in c:
+        return (
+            "Chave da API Gemini inválida ou não configurada",
+            "Acesse as integrações do bot, aba Gemini, e verifique se a API key está correta. Gere uma nova em aistudio.google.com/apikey se necessário.",
+            "/app/bot",
+        )
+
+    # ── Canceled ──────────────────────────────────────────────────────────
+    if "canceled_by_user" in c:
+        return ("Cancelado manualmente", "Este post foi cancelado pelo usuário.", "")
+
+    # ── Generic ───────────────────────────────────────────────────────────
+    if c:
+        return (
+            f"Erro interno",
+            f"Código de erro: {c[:120]}. Consulte a página de Logs para mais detalhes.",
+            "/app/logs",
+        )
+    return ("Erro desconhecido", "Consulte a página de Logs para mais detalhes.", "/app/logs")
+
+
+def _get_post_error(db, post_id: str, user_id: str) -> str:
+    """Return the most recent error string from job_logs for a given post."""
+    log = db.scalar(
+        select(JobLog)
+        .where(
+            JobLog.post_id == post_id,
+            JobLog.user_id == user_id,
+            JobLog.status == "error",
+        )
+        .order_by(JobLog.created_at.desc())
+        .limit(1)
+    )
+    if not log:
+        return ""
+    meta = log.meta_json or {}
+    return str(meta.get("error") or log.message or "")
 
 
 @router.get("/app/notifications/feed", include_in_schema=False)
@@ -3717,6 +3840,14 @@ def notifications_feed(user: User = Depends(get_current_user), db=Depends(get_db
             when_str = ts.replace(tzinfo=timezone.utc).astimezone(tz).strftime("%d/%m %H:%M")
         except Exception:
             when_str = str(ts)[:16]
+
+        error_label, fix, fix_url = "", "", ""
+        if post.status == PostStatus.failed:
+            raw_err = _get_post_error(db, post.id, user.id)
+            if not raw_err and is_canceled:
+                raw_err = "canceled_by_user"
+            error_label, fix, fix_url = _translate_error(raw_err)
+
         feed.append({
             "id": post.id,
             "type": ntype,
@@ -3725,13 +3856,16 @@ def notifications_feed(user: User = Depends(get_current_user), db=Depends(get_db
             "status": label,
             "when": when_str,
             "wp_url": post.wp_url or "",
+            "error_label": error_label,
+            "fix": fix,
+            "fix_url": fix_url,
         })
     return _JSONResponse(feed)
 
 
 @router.get("/app/notifications", include_in_schema=False)
 def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db)):
-    """Full notifications page with recent events and toggle settings."""
+    """Full notifications page with recent events, error details and toggle settings."""
     rows = list(
         db.execute(
             select(Post, CollectedContent.title, AutomationProfile.name.label("bot_name"))
@@ -3757,44 +3891,79 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
         except Exception:
             when_str = str(ts)[:16]
         safe_title = html.escape(str(title or "Sem título"))
-        safe_bot = html.escape(str(bot_name or ""))
-        safe_when = html.escape(when_str)
-        wp_url = post.wp_url or ""
-        link_html = (
-            f"<a href='{html.escape(wp_url)}' target='_blank' rel='noopener' "
-            f"style='color:#10b981;font-size:12px;font-weight:600;text-decoration:none;margin-left:8px'>🔗 Ver post</a>"
-        ) if is_ok and wp_url else ""
+        safe_bot   = html.escape(str(bot_name or ""))
+        safe_when  = html.escape(when_str)
+        wp_url     = post.wp_url or ""
+
         if is_ok:
-            icon_html = "<span style='width:30px;height:30px;border-radius:50%;background:rgba(16,185,129,.15);color:#10b981;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px'>✓</span>"
-            badge_html = f"<span style='color:#10b981;font-size:11px;font-weight:700;background:rgba(16,185,129,.12);padding:2px 8px;border-radius:20px'>✓ {html.escape(label)}</span>"
-            row_style = "border-left:3px solid #10b981;background:rgba(16,185,129,.03)"
+            icon_html  = "<span style='width:32px;height:32px;border-radius:50%;background:rgba(16,185,129,.15);color:#10b981;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px;font-weight:700'>✓</span>"
+            badge_html = f"<span style='color:#10b981;font-size:11px;font-weight:700;background:rgba(16,185,129,.12);padding:3px 10px;border-radius:20px;white-space:nowrap'>✓ {html.escape(label)}</span>"
+            row_style  = "border-left:3px solid #10b981;background:rgba(16,185,129,.03)"
+            link_html  = (
+                f"<a href='{html.escape(wp_url)}' target='_blank' rel='noopener' "
+                f"style='color:#10b981;font-size:12px;font-weight:600;text-decoration:none'>🔗 Ver post</a>"
+            ) if wp_url else ""
+            error_block = ""
         else:
-            icon_html = "<span style='width:30px;height:30px;border-radius:50%;background:rgba(239,68,68,.12);color:#ef4444;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px'>✕</span>"
-            badge_html = f"<span style='color:#ef4444;font-size:11px;font-weight:700;background:rgba(239,68,68,.08);padding:2px 8px;border-radius:20px'>✕ {html.escape(label)}</span>"
-            row_style = "border-left:3px solid #ef4444;background:rgba(239,68,68,.02)"
+            icon_html  = "<span style='width:32px;height:32px;border-radius:50%;background:rgba(239,68,68,.12);color:#ef4444;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px;font-weight:700'>✕</span>"
+            badge_html = f"<span style='color:#ef4444;font-size:11px;font-weight:700;background:rgba(239,68,68,.08);padding:3px 10px;border-radius:20px;white-space:nowrap'>✕ {html.escape(label)}</span>"
+            row_style  = "border-left:3px solid #ef4444;background:rgba(239,68,68,.02)"
+            link_html  = ""
+
+            raw_err = _get_post_error(db, post.id, user.id)
+            if not raw_err and is_canceled:
+                raw_err = "canceled_by_user"
+            error_label, fix, fix_url = _translate_error(raw_err)
+
+            fix_btn = ""
+            if fix_url:
+                fix_btn = (
+                    f"<a href='{html.escape(fix_url)}' "
+                    f"style='display:inline-flex;align-items:center;gap:5px;margin-top:8px;"
+                    f"font-size:12px;font-weight:600;color:#fff;background:#ef4444;"
+                    f"border-radius:8px;padding:6px 14px;text-decoration:none;width:fit-content'>"
+                    f"→ Corrigir agora</a>"
+                )
+
+            error_block = f"""
+            <div style='margin-top:10px;padding:12px 14px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.18);border-radius:10px'>
+              <div style='font-size:12px;font-weight:700;color:#ef4444;margin-bottom:4px'>
+                ⚠ {html.escape(error_label)}
+              </div>
+              <div style='font-size:12px;color:var(--text);line-height:1.6'>
+                {html.escape(fix)}
+              </div>
+              {fix_btn}
+            </div>"""
+
         items_html += f"""
-        <div style='{row_style};padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px'>
-          {icon_html}
-          <div style='flex:1;min-width:0'>
-            <div style='font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{safe_title}</div>
-            <div style='font-size:12px;color:var(--muted);margin-top:3px'>{safe_bot} · {safe_when}</div>
+        <div style='{row_style};padding:16px 20px;border-bottom:1px solid var(--border)'>
+          <div style='display:flex;align-items:center;gap:12px'>
+            {icon_html}
+            <div style='flex:1;min-width:0'>
+              <div style='font-size:13px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{safe_title}</div>
+              <div style='font-size:12px;color:var(--muted);margin-top:2px'>{safe_bot} · {safe_when}</div>
+            </div>
+            <div style='display:flex;align-items:center;gap:8px;flex-shrink:0'>
+              {badge_html}
+              {link_html}
+            </div>
           </div>
-          <div style='display:flex;align-items:center;gap:8px;flex-shrink:0'>
-            {badge_html}{link_html}
-          </div>
+          {error_block}
         </div>"""
+
     if not items_html:
-        items_html = "<div style='padding:40px;text-align:center;color:var(--muted);font-size:14px'>Nenhuma notificação ainda</div>"
+        items_html = "<div style='padding:40px;text-align:center;color:var(--muted);font-size:14px'>Nenhuma notificação ainda. Quando posts forem publicados ou falharem, aparecerão aqui.</div>"
 
     body = f"""
     <div style='display:flex;flex-direction:column;gap:20px'>
       <div class="card" style='padding:0;overflow:hidden'>
-        <div style='padding:18px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between'>
+        <div style='padding:18px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px'>
           <div>
             <h3 style='margin:0 0 2px'>Notificações</h3>
-            <p class='muted' style='margin:0;font-size:13px'>Posts publicados e erros recentes</p>
+            <p class='muted' style='margin:0;font-size:13px'>Posts publicados e erros — com causa e como corrigir</p>
           </div>
-          <button onclick="document.getElementById('notif-list').innerHTML='<div style=\\'padding:40px;text-align:center;color:var(--muted)\\'>Marcadas como lidas</div>';localStorage.setItem('ph-notif-seen-id','{{}}'.replace('{{}}',''));var b=document.getElementById('notif-badge');if(b)b.classList.remove('visible');" class='btn secondary' style='font-size:12px;padding:7px 14px'>Marcar todas como lidas</button>
+          <button onclick="document.getElementById('notif-list').innerHTML='<div style=\\'padding:40px;text-align:center;color:var(--muted)\\'>Marcadas como lidas</div>';var b=document.getElementById('notif-badge');if(b)b.classList.remove('visible');" class='btn secondary' style='font-size:12px;padding:7px 14px'>Marcar todas como lidas</button>
         </div>
         <div id='notif-list'>
           {items_html}
@@ -3804,15 +3973,15 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
       <div class="card">
         <h3 style='margin:0 0 4px'>Configurações de Notificação</h3>
         <p class='muted' style='font-size:13px;margin:0 0 18px'>Escolha quais eventos geram notificações no sino.</p>
-        <div style='display:flex;flex-direction:column;gap:14px' id='notif-settings-form'>
+        <div style='display:flex;flex-direction:column;gap:14px'>
           <div style='display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border:1px solid var(--border);border-radius:12px'>
             <div>
               <div style='font-size:13px;font-weight:600'>Posts publicados com sucesso</div>
               <div style='font-size:12px;color:var(--muted);margin-top:2px'>Notificar quando um post for publicado no WordPress</div>
             </div>
-            <label class='toggle-switch' style='position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0'>
+            <label style='position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0'>
               <input type='checkbox' id='ns-success' style='opacity:0;width:0;height:0' onchange='_saveNotifSettings()'>
-              <span style='position:absolute;cursor:pointer;inset:0;background:var(--surface2);border-radius:999px;transition:.25s;border:1px solid var(--border)'></span>
+              <span class='ns-track'></span>
             </label>
           </div>
           <div style='display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border:1px solid var(--border);border-radius:12px'>
@@ -3820,22 +3989,27 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
               <div style='font-size:13px;font-weight:600'>Erros e falhas</div>
               <div style='font-size:12px;color:var(--muted);margin-top:2px'>Notificar quando um post falhar ou for cancelado</div>
             </div>
-            <label class='toggle-switch' style='position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0'>
+            <label style='position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0'>
               <input type='checkbox' id='ns-error' style='opacity:0;width:0;height:0' onchange='_saveNotifSettings()'>
-              <span style='position:absolute;cursor:pointer;inset:0;background:var(--surface2);border-radius:999px;transition:.25s;border:1px solid var(--border)'></span>
+              <span class='ns-track'></span>
             </label>
           </div>
         </div>
       </div>
     </div>
     <style>
-      .toggle-switch input:checked + span {{ background:var(--primary); border-color:var(--primary); }}
-      .toggle-switch span::after {{
+      .ns-track {{
+        position:absolute; cursor:pointer; inset:0;
+        background:var(--surface2); border-radius:999px;
+        transition:.25s; border:1px solid var(--border);
+      }}
+      .ns-track::after {{
         content:''; position:absolute; left:3px; top:3px;
         width:16px; height:16px; border-radius:50%; background:#fff;
         transition:.25s; box-shadow:0 1px 3px rgba(0,0,0,.25);
       }}
-      .toggle-switch input:checked + span::after {{ transform:translateX(20px); }}
+      input:checked + .ns-track {{ background:var(--primary); border-color:var(--primary); }}
+      input:checked + .ns-track::after {{ transform:translateX(20px); }}
     </style>
     <script>
       (function(){{
@@ -3847,11 +4021,13 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
         var s = load();
         var cb_s = document.getElementById('ns-success');
         var cb_e = document.getElementById('ns-error');
-        if (cb_s) cb_s.checked = !!s.success;
-        if (cb_e) cb_e.checked = !!s.error;
+        if (cb_s) cb_s.checked = s.success !== false;
+        if (cb_e) cb_e.checked = s.error !== false;
         window._saveNotifSettings = function() {{
-          var ns = {{ success: cb_s ? cb_s.checked : true, error: cb_e ? cb_e.checked : true }};
-          localStorage.setItem(LS, JSON.stringify(ns));
+          localStorage.setItem(LS, JSON.stringify({{
+            success: cb_s ? cb_s.checked : true,
+            error:   cb_e ? cb_e.checked : true,
+          }}));
         }};
       }})();
     </script>
