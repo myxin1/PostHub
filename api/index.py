@@ -15,27 +15,19 @@ if not os.environ.get("DATABASE_URL"):
     os.environ["DATABASE_URL"] = "sqlite:////tmp/posthub.db"
 os.environ.setdefault("POSTHUB_INLINE_WORKER", "0")
 
-# ── Import the app — show any error clearly ───────────────────────────────────
-_app = None
-_import_tb: str | None = None
+# ── Top-level `app` assignment required by @vercel/python static scanner ──────
+from fastapi import FastAPI  # noqa: E402
+app = FastAPI()  # placeholder; overwritten below if backend import succeeds
 
+# ── Import real app — overwrites `app`; on failure keeps the placeholder ──────
 try:
-    from app.main import app as _app  # noqa: E402
+    from app.main import app  # type: ignore[assignment]  # noqa: E402, F811
 except Exception:
-    _import_tb = traceback.format_exc()
-
-if _app is not None:
-    app = _app
-else:
-    from fastapi import FastAPI
-    from fastapi.responses import PlainTextResponse
-
-    app = FastAPI()
-
-    _tb = _import_tb or "Unknown import error"
+    _tb = traceback.format_exc()
 
     @app.get("/{path:path}")
     async def _import_error(path: str = ""):
+        from fastapi.responses import PlainTextResponse
         return PlainTextResponse(
             f"IMPORT ERROR\n\nPython path: {sys.path}\n\nBackend dir: {_BACKEND}\n"
             f"Dir exists: {os.path.isdir(_BACKEND)}\n"
