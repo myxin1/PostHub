@@ -65,21 +65,7 @@ async def google_callback(request: Request, db=Depends(get_db)):
         return RedirectResponse("/app/login?msg=Falha+no+login+Google", status_code=status.HTTP_302_FOUND)
     user = db.scalar(select(User).where(User.email == email))
     if not user:
-        # Auto-create user on first Google login
-        import datetime
-        user = User(
-            id=str(_uuid.uuid4()),
-            email=email,
-            access_id=email.split("@")[0][:32],
-            password_hash="",
-            must_set_password=False,
-            role=UserRole.USER,
-            timezone="UTC",
-            created_at=datetime.datetime.utcnow(),
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        return RedirectResponse("/app/login?msg=Acesso+negado.+Solicite+ao+administrador.", status_code=status.HTTP_302_FOUND)
     access_token = create_access_token(subject=user.id, role=user.role.value)
     resp = RedirectResponse("/app", status_code=status.HTTP_302_FOUND)
     resp.set_cookie("access_token", access_token, httponly=True, samesite="lax")
