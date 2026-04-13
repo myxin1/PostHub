@@ -57,8 +57,15 @@ async def google_callback(request: Request, db=Depends(get_db)):
     if not settings.google_client_id or not settings.google_client_secret:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="google_oauth_not_configured")
     oauth = _oauth()
-    # Pass the same redirect_uri used in the login step
-    token = await oauth.google.authorize_access_token(request, redirect_uri=_callback_uri(request))
+    try:
+        # Pass the same redirect_uri used in the login step
+        token = await oauth.google.authorize_access_token(request, redirect_uri=_callback_uri(request))
+    except Exception as exc:
+        import traceback
+        return RedirectResponse(
+            f"/app/login?msg=Erro+OAuth:+{str(exc)[:120]}",
+            status_code=status.HTTP_302_FOUND,
+        )
     userinfo = token.get("userinfo") or {}
     email = str(userinfo.get("email") or "").strip().lower()
     if not email:
