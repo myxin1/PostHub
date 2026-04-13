@@ -437,6 +437,38 @@ def _base_css() -> str:
       flex-shrink: 0;
     }
     .sidebar-toggle-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }
+    /* ── icon action buttons ── */
+    .act-btn {
+      background: none; border: 1px solid transparent; cursor: pointer;
+      padding: 7px; border-radius: 9px; color: var(--muted);
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background .15s, color .15s, border-color .15s;
+      text-decoration: none; flex-shrink: 0;
+    }
+    .act-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border); }
+    .act-btn.danger:hover { color: #ef4444; border-color: rgba(239,68,68,.3); background: rgba(239,68,68,.07); }
+    .act-btn.primary-hover:hover { color: var(--primary); border-color: rgba(139,92,246,.3); background: rgba(139,92,246,.07); }
+    /* online pill badge (active bot) */
+    .bot-online-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;
+      color: #10b981; background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3);
+      cursor: pointer; transition: background .15s, border-color .15s;
+      white-space: nowrap;
+    }
+    .bot-online-pill:hover { background: rgba(239,68,68,.1); color: #ef4444; border-color: rgba(239,68,68,.3); }
+    .bot-online-pill:hover .pill-dot { background: #ef4444; animation: none; }
+    .pill-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; flex-shrink: 0;
+      box-shadow: 0 0 0 0 rgba(16,185,129,.6); animation: pulse-green 1.8s infinite; }
+    /* ligar bot */
+    .bot-ligar-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;
+      color: var(--muted); background: var(--surface2); border: 1px solid var(--border);
+      cursor: pointer; transition: all .15s; white-space: nowrap;
+    }
+    .bot-ligar-btn:hover { color: #10b981; background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.3); }
+    .bot-ligar-btn:disabled { opacity: .4; cursor: not-allowed; }
     /* ── toggle-section (collapsible cards) ── */
     details.toggle-section > summary { list-style:none; display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:14px 0 14px; border-bottom:1px solid var(--border); user-select:none; }
     details.toggle-section > summary::-webkit-details-marker { display:none; }
@@ -1638,54 +1670,80 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
         pending   = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.pending)) or 0)
         return wp_url, completed, failed, pending
 
-    _ico_gear = "<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='3'/><path d='M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z'/></svg>"
-    _ico_trash = "<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><polyline points='3 6 5 6 21 6'/><path d='M19 6l-1 14H6L5 6'/><path d='M10 11v6'/><path d='M14 11v6'/><path d='M9 6V4h6v2'/></svg>"
-    _ico_on  = "<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><path d='M18.36 6.64A9 9 0 1 1 5.64 5.64'/><line x1='12' y1='2' x2='12' y2='12'/></svg>"
+    # SVG icons (16px, no fill, stroke only)
+    _ico_gear = ("<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>"
+                 "<circle cx='12' cy='12' r='3'/>"
+                 "<path d='M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z'/>"
+                 "</svg>")
+    _ico_trash = ("<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>"
+                  "<polyline points='3 6 5 6 21 6'/><path d='M19 6l-1 14H6L5 6'/><path d='M10 11v6'/><path d='M14 11v6'/><path d='M9 6V4h6v2'/>"
+                  "</svg>")
+    _ico_power = ("<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>"
+                  "<path d='M18.36 6.64A9 9 0 1 1 5.64 5.64'/><line x1='12' y1='2' x2='12' y2='12'/>"
+                  "</svg>")
+
+    # Conta quantos bots ativos existem (para controle do limite)
+    active_count = int(db.scalar(
+        select(func.count()).select_from(AutomationProfile)
+        .where(AutomationProfile.user_id == user.id, AutomationProfile.active.is_(True))
+    ) or 0)
+    MAX_ACTIVE = 3
+    can_activate_more = active_count < MAX_ACTIVE
 
     proj_rows = ""
     for pr in all_profiles:
-        is_active = pr.id == bot.id
+        is_active = pr.active
         wp_url, p_done, p_fail, p_pend = _proj_stats(pr)
         pr_emoji = (pr.publish_config_json or {}).get("emoji") or "🤖"
 
-        # Badge de status
+        # Badge de status na coluna "Projeto"
         if is_active:
             status_badge = "<span class='badge-active' style='font-size:11px'><span class='dot-pulse'></span>Online</span>"
-            card_style = "border:1.5px solid #10b981;background:rgba(16,185,129,.06);"
         else:
             status_badge = "<span class='badge-inactive' style='font-size:11px'><span class='dot-off'></span>Inativo</span>"
-            card_style = "border:1px solid var(--border);"
 
         # WordPress info
         if wp_url:
             wp_info = f"<a href='{html.escape(wp_url)}' target='_blank' style='font-size:12px;color:var(--primary);text-decoration:none;word-break:break-all'>{html.escape(wp_url)}</a>"
         else:
-            wp_info = "<span style='font-size:12px;color:var(--muted)'>WordPress não configurado</span>"
+            wp_info = "<span style='font-size:12px;color:var(--muted)'>Não configurado</span>"
 
-        # Botão Usar / Em uso
+        # Botão toggle ON/OFF
         if is_active:
-            usar_btn = "<span style='font-size:12px;color:#10b981;font-weight:600'>✓ Em uso</span>"
+            toggle_btn = (
+                f"<form method='post' action='/app/robot/toggle/{pr.id}' style='margin:0'>"
+                f"<button type='submit' class='bot-online-pill' title='Clique para desligar'>"
+                f"<span class='pill-dot'></span>Online"
+                f"</button></form>"
+            )
+        elif can_activate_more:
+            toggle_btn = (
+                f"<form method='post' action='/app/robot/toggle/{pr.id}' style='margin:0'>"
+                f"<button type='submit' class='bot-ligar-btn' title='Ligar este robô'>"
+                f"{_ico_power} Ligar"
+                f"</button></form>"
+            )
         else:
-            usar_btn = (
-                f"<form method='post' action='/app/robot/switch/{pr.id}' style='margin:0'>"
-                f"<button class='btn' type='submit' style='font-size:12px;padding:5px 14px'>"
-                f"<svg width='10' height='10' viewBox='0 0 24 24' fill='currentColor' style='margin-right:4px'><polygon points='5,3 19,12 5,21'/></svg>Usar</button></form>"
+            toggle_btn = (
+                f"<button type='button' class='bot-ligar-btn' disabled title='Limite de {MAX_ACTIVE} robôs ativos atingido'>"
+                f"{_ico_power} Ligar"
+                f"</button>"
             )
 
-        # Botão Config
+        # Botão Config (ícone puro)
         config_btn = (
-            f"<a href='/app/profiles/{pr.id}?tab=integracoes' class='btn secondary' style='font-size:12px;padding:5px 12px'>"
-            f"{_ico_gear} Config</a>"
+            f"<a href='/app/profiles/{pr.id}?tab=integracoes' class='act-btn primary-hover' title='Configurar'>"
+            f"{_ico_gear}</a>"
         )
 
-        # Botão Excluir
+        # Botão Excluir (ícone puro, vermelho no hover)
         if is_active and len(all_profiles) > 1:
-            del_confirm = f"'{html.escape(pr.name)}' é o robô ativo. Outro será ativado. Confirmar exclusão?"
+            del_confirm = f"'{html.escape(pr.name)}' está Online. Desligar e excluir?"
         else:
-            del_confirm = f"Excluir '{html.escape(pr.name)}'? Esta ação não pode ser desfeita."
+            del_confirm = f"Excluir '{html.escape(pr.name)}'? Não pode ser desfeito."
         del_btn = (
             f"<form method='post' action='/app/robot/delete/{pr.id}' style='margin:0' onsubmit=\"return confirm('{del_confirm}')\">"
-            f"<button type='submit' class='btn secondary' style='font-size:12px;padding:5px 10px;color:#ef4444'>{_ico_trash}</button></form>"
+            f"<button type='submit' class='act-btn danger' title='Excluir'>{_ico_trash}</button></form>"
         )
 
         proj_rows += f"""
@@ -1708,7 +1766,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             </div>
           </td>
           <td style="padding:12px 10px">
-            <div style="display:flex;gap:6px;align-items:center">{usar_btn} {config_btn} {del_btn}</div>
+            <div style="display:flex;gap:6px;align-items:center">{toggle_btn} {config_btn} {del_btn}</div>
           </td>
         </tr>"""
 
@@ -1744,7 +1802,12 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     <div class="card" style="margin-bottom:14px">
       <details class="toggle-section" open>
         <summary>
-          <span class="ts-title">Projetos / Robôs <span class="ts-badge">{len(all_profiles)}</span></span>
+          <span class="ts-title">
+            Projetos / Robôs
+            <span class="ts-badge">{len(all_profiles)} total</span>
+            <span class="ts-badge" style="color:#10b981;border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.08)">{active_count} online</span>
+            <span class="ts-badge" style="color:var(--muted)">{MAX_ACTIVE} max</span>
+          </span>
           <span class="ts-arrow">▶</span>
         </summary>
         <div class="ts-body" style="padding-top:0">
@@ -1997,16 +2060,46 @@ def robot_clear_posts(user: User = Depends(get_current_user), db=Depends(get_db)
 
 @router.post("/app/robot/switch/{profile_id}", include_in_schema=False)
 def robot_switch(profile_id: str, user: User = Depends(get_current_user), db=Depends(get_db)):
+    """Legacy: ativa exclusivamente um bot (mantido para compatibilidade)."""
     p = db.scalar(select(AutomationProfile).where(AutomationProfile.id == profile_id, AutomationProfile.user_id == user.id))
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    # Desativa TODOS os perfis do usuário primeiro
     db.execute(update(AutomationProfile).where(AutomationProfile.user_id == user.id).values(active=False))
     db.flush()
-    # Ativa apenas o selecionado
     db.execute(update(AutomationProfile).where(AutomationProfile.id == profile_id).values(active=True))
     db.commit()
-    return RedirectResponse("/app/robot?msg=Projeto+ativado%3A+" + profile_id[:8], status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/app/robot/toggle/{profile_id}", include_in_schema=False)
+def robot_toggle(profile_id: str, user: User = Depends(get_current_user), db=Depends(get_db)):
+    """Liga/desliga um bot. Permite até 3 ativos simultaneamente."""
+    MAX_ACTIVE = 3
+    p = db.scalar(select(AutomationProfile).where(AutomationProfile.id == profile_id, AutomationProfile.user_id == user.id))
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if p.active:
+        # Desligar: só permite se houver outro ativo
+        other_active = db.scalar(
+            select(func.count()).select_from(AutomationProfile)
+            .where(AutomationProfile.user_id == user.id, AutomationProfile.active.is_(True), AutomationProfile.id != profile_id)
+        ) or 0
+        if other_active == 0:
+            return RedirectResponse(f"/app/robot?msg={quote_plus('Mantenha ao menos 1 robô ativo.')}", status_code=status.HTTP_302_FOUND)
+        p.active = False
+        db.add(p); db.commit()
+        return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
+    else:
+        # Ligar: verifica limite de 3
+        active_count = db.scalar(
+            select(func.count()).select_from(AutomationProfile)
+            .where(AutomationProfile.user_id == user.id, AutomationProfile.active.is_(True))
+        ) or 0
+        if active_count >= MAX_ACTIVE:
+            return RedirectResponse(f"/app/robot?msg={quote_plus(f'Limite de {MAX_ACTIVE} robôs ativos atingido. Desligue um antes de ligar outro.')}", status_code=status.HTTP_302_FOUND)
+        p.active = True
+        db.add(p); db.commit()
+        return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/robot/delete/{profile_id}", include_in_schema=False)
