@@ -437,6 +437,14 @@ def _base_css() -> str:
       flex-shrink: 0;
     }
     .sidebar-toggle-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }
+    /* ── toggle-section (collapsible cards) ── */
+    details.toggle-section > summary { list-style:none; display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:14px 0 14px; border-bottom:1px solid var(--border); user-select:none; }
+    details.toggle-section > summary::-webkit-details-marker { display:none; }
+    details.toggle-section > summary .ts-title { font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; }
+    details.toggle-section > summary .ts-arrow { font-size:11px; color:var(--muted); transition:transform .2s; flex-shrink:0; }
+    details.toggle-section[open] > summary .ts-arrow { transform:rotate(90deg); }
+    details.toggle-section > summary .ts-badge { font-size:11px; padding:2px 8px; border-radius:20px; background:var(--surface); border:1px solid var(--border); color:var(--muted); }
+    details.toggle-section > .ts-body { padding-top:14px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom: 1px solid var(--border); padding: 12px 10px; text-align: left; vertical-align: top; color: var(--text); }
     th { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
@@ -1707,15 +1715,6 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     # _ph definido no nível de módulo
 
     body = _NEW_BOT_WIZARD_HTML + f"""
-    <style>
-      details.toggle-section > summary {{ list-style:none; display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:14px 0 14px; border-bottom:1px solid var(--border); user-select:none; }}
-      details.toggle-section > summary::-webkit-details-marker {{ display:none; }}
-      details.toggle-section > summary .ts-title {{ font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; }}
-      details.toggle-section > summary .ts-arrow {{ font-size:11px; color:var(--muted); transition:transform .2s; }}
-      details.toggle-section[open] > summary .ts-arrow {{ transform:rotate(90deg); }}
-      details.toggle-section > summary .ts-badge {{ font-size:11px; padding:2px 8px; border-radius:20px; background:var(--surface); border:1px solid var(--border); color:var(--muted); }}
-      details.toggle-section > .ts-body {{ padding-top:14px; }}
-    </style>
 
     {_ph("active-project-banner")}
     <div class="active-project-banner" style="margin-bottom:14px">
@@ -2124,31 +2123,41 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         )
         body += f"""
         {_ph("tab-fontes")}
-        <div class="card">
-          {_ph("form-adicionar-fonte")}
-          <div class="row">
-            <div class="col card">
-              <h3>Adicionar fonte</h3>
-              <form method="post" action="/app/profiles/{p.id}/sources/create">
-                {_ph("select-tipo-fonte")}
-                <label>Tipo</label>
-                <select name="type">
-                  <option value="URL">URL</option>
-                  <option value="RSS">RSS</option>
-                  <option value="KEYWORD">PALAVRA-CHAVE</option>
-                </select>
-                <label style="margin-top:8px">Valor</label>
-                {_ph("input-valor-fonte")}
-                <input name="value" required />
-                <div style="margin-top:12px">{_ph("btn-salvar-fonte")}<button class="btn" type="submit">Salvar</button></div>
-              </form>
+        <div class="card" style="margin-bottom:14px">
+          <details class="toggle-section" open>
+            <summary><span class="ts-title">Adicionar Fonte</span><span class="ts-arrow">▶</span></summary>
+            <div class="ts-body">
+              {_ph("form-adicionar-fonte")}
+              <div class="row">
+                <div class="col card">
+                  <form method="post" action="/app/profiles/{p.id}/sources/create">
+                    {_ph("select-tipo-fonte")}
+                    <label>Tipo</label>
+                    <select name="type">
+                      <option value="URL">URL</option>
+                      <option value="RSS">RSS</option>
+                      <option value="KEYWORD">PALAVRA-CHAVE</option>
+                    </select>
+                    <label style="margin-top:8px">Valor</label>
+                    {_ph("input-valor-fonte")}
+                    <input name="value" required />
+                    <div style="margin-top:12px">{_ph("btn-salvar-fonte")}<button class="btn" type="submit">Salvar</button></div>
+                  </form>
+                </div>
+              </div>
             </div>
-          </div>
-          {_ph("tabela-fontes-cadastradas")}
-          <h3 style="margin:0">Fontes</h3>
-          <div class="scrollbox">
-            <table id="sources-table"><thead><tr><th>Tipo</th><th>Valor</th><th></th></tr></thead><tbody>{rows}</tbody></table>
-          </div>
+          </details>
+        </div>
+        <div class="card">
+          <details class="toggle-section" open>
+            <summary><span class="ts-title">Fontes Cadastradas <span class="ts-badge">{len(sources)}</span></span><span class="ts-arrow">▶</span></summary>
+            <div class="ts-body">
+              {_ph("tabela-fontes-cadastradas")}
+              <div class="scrollbox">
+                <table id="sources-table"><thead><tr><th>Tipo</th><th>Valor</th><th></th></tr></thead><tbody>{rows}</tbody></table>
+              </div>
+            </div>
+          </details>
         </div>
         """
     elif tab == "publicacao":
@@ -2193,7 +2202,9 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         body += f"""
         {_ph("tab-publicacao")}
         <div class="card">
-          <h3>Publicação</h3>
+          <details class="toggle-section" open>
+            <summary><span class="ts-title">Publicação</span><span class="ts-arrow">▶</span></summary>
+            <div class="ts-body">
           <div class="row">
             <div class="col card">
               {_ph("publicacao-wordpress")}
@@ -2229,6 +2240,8 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
               <p class="muted" style="margin-top:10px">A postagem no Facebook roda depois do WordPress. Você escolhe as páginas e onde entra o link.</p>
             </div>
           </div>
+            </div>
+          </details>
         </div>
         """
     elif tab == "integracoes":
@@ -2601,11 +2614,15 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         body += f"""
         {_ph("tab-integracoes")}
         <div class="card">
-          {_ph("abas-internas-integracoes")}
-          <h3 style="text-align:center;margin-bottom:20px">Integrações</h3>
-          {itab_nav}
-          {_ph(f"conteudo-aba-{itab}")}
-          {itab_content}
+          <details class="toggle-section" open>
+            <summary><span class="ts-title">Integrações</span><span class="ts-arrow">▶</span></summary>
+            <div class="ts-body">
+              {_ph("abas-internas-integracoes")}
+              {itab_nav}
+              {_ph(f"conteudo-aba-{itab}")}
+              {itab_content}
+            </div>
+          </details>
         </div>
         """
     elif tab == "agendamento":
@@ -2623,37 +2640,41 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         body += f"""
         {_ph("tab-agendamento")}
         <div class="card">
-          {_ph("form-agendamento")}
-          <h3>Agendamento</h3>
-          <p class="muted">Define quantidade, intervalo e data/hora de início. Esse agendamento vai valer pro WordPress e depois pro Facebook também.</p>
-          <form method="post" action="/app/profiles/{p.id}/schedule">
-            <div class="row">
-              <div class="col">
-                <label>Quantidade</label>
-                <input name="posts_per_day" type="number" min="1" step="1" value="{posts_per_day}" />
-              </div>
-              <div class="col">
-                <label>Tempo entre postagens (min)</label>
-                <input name="interval_minutes" type="number" min="0" value="{interval_minutes}" />
-                <div class="muted" style="margin-top:6px">0 = roda tudo seguido</div>
-              </div>
-              <div class="col">
-                <label>Começar em (data/hora)</label>
-                <input name="start_at" type="datetime-local" value="{html.escape(start_local_value)}" />
-                <div class="muted" style="margin-top:6px">Vazio = começar agora</div>
-              </div>
+          <details class="toggle-section" open>
+            <summary><span class="ts-title">Agendamento</span><span class="ts-arrow">▶</span></summary>
+            <div class="ts-body">
+              {_ph("form-agendamento")}
+              <p class="muted">Define quantidade, intervalo e data/hora de início. Esse agendamento vai valer pro WordPress e depois pro Facebook também.</p>
+              <form method="post" action="/app/profiles/{p.id}/schedule">
+                <div class="row">
+                  <div class="col">
+                    <label>Quantidade</label>
+                    <input name="posts_per_day" type="number" min="1" step="1" value="{posts_per_day}" />
+                  </div>
+                  <div class="col">
+                    <label>Tempo entre postagens (min)</label>
+                    <input name="interval_minutes" type="number" min="0" value="{interval_minutes}" />
+                    <div class="muted" style="margin-top:6px">0 = roda tudo seguido</div>
+                  </div>
+                  <div class="col">
+                    <label>Começar em (data/hora)</label>
+                    <input name="start_at" type="datetime-local" value="{html.escape(start_local_value)}" />
+                    <div class="muted" style="margin-top:6px">Vazio = começar agora</div>
+                  </div>
+                </div>
+                <div class="row">
+                  <div class="col">
+                    <label>Respeitar agendamento</label>
+                    <select name="respect_schedule">
+                      <option value="0">Não (rodar agora)</option>
+                      <option value="1" {"selected" if int(cfg.get("respect_schedule") or 0) == 1 else ""}>Sim (usar intervalo e data/hora)</option>
+                    </select>
+                  </div>
+                </div>
+                <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
+              </form>
             </div>
-            <div class="row">
-              <div class="col">
-                <label>Respeitar agendamento</label>
-                <select name="respect_schedule">
-                  <option value="0">Não (rodar agora)</option>
-                  <option value="1" {"selected" if int(cfg.get("respect_schedule") or 0) == 1 else ""}>Sim (usar intervalo e data/hora)</option>
-                </select>
-              </div>
-            </div>
-            <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
-          </form>
+          </details>
         </div>
         """
     elif tab == "ia":
@@ -2674,24 +2695,28 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         body += f"""
         {_ph("tab-ia-comandos")}
         <div class="card">
-          {_ph("form-prompts-ia")}
-          <h3>Comandos da IA</h3>
-          <p class="muted">Você pode editar o comando do site e do Facebook quando quiser.</p>
-          <form method="post" action="/app/profiles/{p.id}/ai-prompts">
-            <div class="row">
-              <div class="col card">
-                {_ph("prompt-wordpress")}
-                <h4>Site (WordPress)</h4>
-                <textarea name="site_prompt" placeholder="Cole o comando do site aqui">{html.escape(site_prompt)}</textarea>
-              </div>
-              <div class="col card">
-                {_ph("prompt-facebook")}
-                <h4>Facebook</h4>
-                <textarea name="facebook_prompt" placeholder="Cole o comando do Facebook aqui">{html.escape(fb_prompt)}</textarea>
-              </div>
+          <details class="toggle-section" open>
+            <summary><span class="ts-title">Comandos da IA</span><span class="ts-arrow">▶</span></summary>
+            <div class="ts-body">
+              {_ph("form-prompts-ia")}
+              <p class="muted">Você pode editar o comando do site e do Facebook quando quiser.</p>
+              <form method="post" action="/app/profiles/{p.id}/ai-prompts">
+                <div class="row">
+                  <div class="col card">
+                    {_ph("prompt-wordpress")}
+                    <h4>Site (WordPress)</h4>
+                    <textarea name="site_prompt" placeholder="Cole o comando do site aqui">{html.escape(site_prompt)}</textarea>
+                  </div>
+                  <div class="col card">
+                    {_ph("prompt-facebook")}
+                    <h4>Facebook</h4>
+                    <textarea name="facebook_prompt" placeholder="Cole o comando do Facebook aqui">{html.escape(fb_prompt)}</textarea>
+                  </div>
+                </div>
+                <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
+              </form>
             </div>
-            <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
-          </form>
+          </details>
         </div>
         """
     else:
@@ -2785,76 +2810,90 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         body += f"""
         {_ph("tab-posts-gerenciar")}
         <div class="card" style="margin-bottom:14px">
-          {_ph("acoes-bulk-posts")}
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-            <h3 style="margin:0">Posts</h3>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <form method="post" action="/app/profiles/{p.id}/posts/cancel-all" style="margin:0">
-                <button class="btn secondary" type="submit" style="font-size:12px;padding:6px 12px">Cancelar pendentes</button>
-              </form>
-              <form method="post" action="/app/profiles/{p.id}/posts/delete-completed" style="margin:0">
-                <button class="btn secondary" type="submit" style="font-size:12px;padding:6px 12px">Apagar publicados</button>
-              </form>
+          <details class="toggle-section" open>
+            <summary><span class="ts-title">Ações em Massa</span><span class="ts-arrow">▶</span></summary>
+            <div class="ts-body">
+              {_ph("acoes-bulk-posts")}
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+                <form method="post" action="/app/profiles/{p.id}/posts/cancel-all" style="margin:0">
+                  <button class="btn secondary" type="submit" style="font-size:12px;padding:6px 12px">Cancelar pendentes</button>
+                </form>
+                <form method="post" action="/app/profiles/{p.id}/posts/delete-completed" style="margin:0">
+                  <button class="btn secondary" type="submit" style="font-size:12px;padding:6px 12px">Apagar publicados</button>
+                </form>
+              </div>
+              <p class="muted" style="font-size:12px;margin:0">Cancelar = para a fila (não apaga do WordPress). Apagar = remove do PostHub.</p>
             </div>
-          </div>
-          <p class="muted" style="font-size:12px;margin:0">Cancelar = para a fila (não apaga do WordPress). Apagar = remove do PostHub.</p>
+          </details>
         </div>
 
         <div class="card" style="margin-bottom:14px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="width:28px;height:28px;border-radius:8px;background:rgba(16,185,129,.15);display:flex;align-items:center;justify-content:center;font-size:14px">✓</span>
-              <div>
-                <h4 style="margin:0;font-size:15px">Publicados</h4>
-                <div style="font-size:11px;color:#10b981;font-weight:600">{n_completed} post{'s' if n_completed!=1 else ''}</div>
+          <details class="toggle-section" open>
+            <summary>
+              <span class="ts-title">
+                <span style="width:22px;height:22px;border-radius:6px;background:rgba(16,185,129,.15);display:inline-flex;align-items:center;justify-content:center;font-size:12px">✓</span>
+                Publicados <span class="ts-badge" style="color:#10b981;border-color:rgba(16,185,129,.3)">{n_completed}</span>
+              </span>
+              <span class="ts-arrow">▶</span>
+            </summary>
+            <div class="ts-body">
+              <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+                <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-completed-table tbody')">Limpar lista</button>
               </div>
+              <form method="post" action="/app/profiles/{p.id}/posts/bulk">
+                {_posts_table("posts-completed-table", completed_rows, "Nenhum post publicado ainda.")}
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+                  <button class="btn secondary" type="submit" name="mode" value="delete" style="font-size:12px">Excluir selecionados (PostHub)</button>
+                  <button class="btn secondary" type="submit" name="mode" value="delete_wp" style="font-size:12px;color:#ef4444"
+                    onclick="return confirm('Tem certeza que quer APAGAR do site (WordPress)?')">Apagar do WordPress</button>
+                </div>
+              </form>
             </div>
-            <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-completed-table tbody')">Limpar lista</button>
-          </div>
-          <form method="post" action="/app/profiles/{p.id}/posts/bulk">
-            {_posts_table("posts-completed-table", completed_rows, "Nenhum post publicado ainda.")}
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-              <button class="btn secondary" type="submit" name="mode" value="delete" style="font-size:12px">Excluir selecionados (PostHub)</button>
-              <button class="btn secondary" type="submit" name="mode" value="delete_wp" style="font-size:12px;color:#ef4444"
-                onclick="return confirm('Tem certeza que quer APAGAR do site (WordPress)?')">Apagar do WordPress</button>
-            </div>
-          </form>
+          </details>
         </div>
 
         <div class="card" style="margin-bottom:14px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="width:28px;height:28px;border-radius:8px;background:rgba(245,158,11,.15);display:flex;align-items:center;justify-content:center;font-size:14px">⏳</span>
-              <div>
-                <h4 style="margin:0;font-size:15px">Pendentes / Processando</h4>
-                <div style="font-size:11px;color:#f59e0b;font-weight:600">{n_pending} post{'s' if n_pending!=1 else ''}</div>
+          <details class="toggle-section" open>
+            <summary>
+              <span class="ts-title">
+                <span style="width:22px;height:22px;border-radius:6px;background:rgba(245,158,11,.15);display:inline-flex;align-items:center;justify-content:center;font-size:12px">⏳</span>
+                Pendentes / Processando <span class="ts-badge" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">{n_pending}</span>
+              </span>
+              <span class="ts-arrow">▶</span>
+            </summary>
+            <div class="ts-body">
+              <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+                <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-pending-table tbody')">Limpar lista</button>
               </div>
+              <form method="post" action="/app/profiles/{p.id}/posts/bulk">
+                {_posts_table("posts-pending-table", pending_rows, "Nenhum post pendente.")}
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+                  <button class="btn secondary" type="submit" name="mode" value="cancel" style="font-size:12px">Cancelar selecionados</button>
+                  <button class="btn secondary" type="submit" name="mode" value="delete" style="font-size:12px">Excluir selecionados</button>
+                </div>
+              </form>
             </div>
-            <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-pending-table tbody')">Limpar lista</button>
-          </div>
-          <form method="post" action="/app/profiles/{p.id}/posts/bulk">
-            {_posts_table("posts-pending-table", pending_rows, "Nenhum post pendente.")}
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-              <button class="btn secondary" type="submit" name="mode" value="cancel" style="font-size:12px">Cancelar selecionados</button>
-              <button class="btn secondary" type="submit" name="mode" value="delete" style="font-size:12px">Excluir selecionados</button>
-            </div>
-          </form>
+          </details>
         </div>
 
         <div class="card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="width:28px;height:28px;border-radius:8px;background:rgba(239,68,68,.15);display:flex;align-items:center;justify-content:center;font-size:14px">✕</span>
-              <div>
-                <h4 style="margin:0;font-size:15px">Falhas</h4>
-                <div style="font-size:11px;color:#ef4444;font-weight:600">{n_failed} post{'s' if n_failed!=1 else ''}</div>
+          <details class="toggle-section" open>
+            <summary>
+              <span class="ts-title">
+                <span style="width:22px;height:22px;border-radius:6px;background:rgba(239,68,68,.15);display:inline-flex;align-items:center;justify-content:center;font-size:12px">✕</span>
+                Falhas <span class="ts-badge" style="color:#ef4444;border-color:rgba(239,68,68,.3)">{n_failed}</span>
+              </span>
+              <span class="ts-arrow">▶</span>
+            </summary>
+            <div class="ts-body">
+              <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+                <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-failed-table tbody')">Limpar lista</button>
               </div>
+              <form method="post" action="/app/profiles/{p.id}/posts/bulk">
+                {_posts_table("posts-failed-table", failed_rows, "Nenhuma falha registrada.")}
+              </form>
             </div>
-            <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-failed-table tbody')">Limpar lista</button>
-          </div>
-          <form method="post" action="/app/profiles/{p.id}/posts/bulk">
-            {_posts_table("posts-failed-table", failed_rows, "Nenhuma falha registrada.")}
-          </form>
+          </details>
         </div>
         """
 
@@ -3532,9 +3571,13 @@ def posts_page(user: User = Depends(get_current_user), db=Depends(get_db)):
     )
     body = f"""
     <div class="card">
-      <h2>Posts</h2>
-      <p class="muted">Mostrando as <b>15</b> últimas receitas publicadas.</p>
-      <table><thead><tr><th>Título</th><th>Quando</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table>
+      <details class="toggle-section" open>
+        <summary><span class="ts-title">Posts Publicados <span class="ts-badge">{len(posts)}</span></span><span class="ts-arrow">▶</span></summary>
+        <div class="ts-body">
+          <p class="muted">Mostrando as <b>15</b> últimas receitas publicadas.</p>
+          <table><thead><tr><th>Título</th><th>Quando</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table>
+        </div>
+      </details>
     </div>
     """
     return _layout("Posts", body, user=user)
@@ -3562,15 +3605,21 @@ def logs_page(user: User = Depends(get_current_user), db=Depends(get_db)):
     body = f"""
     {_ph("pagina-logs")}
     <div class="card">
-      {_ph("toolbar-logs")}
-      <div class="toolbar">
-        <h2 style="margin:0">Logs</h2>
-        <button class="btn secondary small" type="button" onclick="clearBox('#logs-table tbody')">Limpar dados</button>
-      </div>
-      {_ph("tabela-logs")}
-      <div class="scrollbox">
-        <table id="logs-table"><thead><tr><th>Etapa</th><th>Status</th><th>Mensagem</th><th>Owner</th><th>Quando</th></tr></thead><tbody>{rows}</tbody></table>
-      </div>
+      <details class="toggle-section" open>
+        <summary>
+          <span class="ts-title">Logs <span class="ts-badge">{len(logs)}</span></span>
+          <span style="display:flex;align-items:center;gap:10px">
+            <button class="btn secondary" style="font-size:12px;padding:5px 10px" type="button" onclick="event.stopPropagation();clearBox('#logs-table tbody')">Limpar dados</button>
+            <span class="ts-arrow">▶</span>
+          </span>
+        </summary>
+        <div class="ts-body">
+          {_ph("tabela-logs")}
+          <div class="scrollbox">
+            <table id="logs-table"><thead><tr><th>Etapa</th><th>Status</th><th>Mensagem</th><th>Owner</th><th>Quando</th></tr></thead><tbody>{rows}</tbody></table>
+          </div>
+        </div>
+      </details>
     </div>
     """
     return _layout("Logs", body, user=user)
@@ -3706,45 +3755,54 @@ def admin_users_page(request: Request, _admin: User = Depends(require_admin), db
     )
     body = f"""
     {_ph("pagina-admin-usuarios")}
+    {"<div class='card' style='border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.06);margin-bottom:14px'><b style='color:#f59e0b'>"+msg+"</b></div>" if msg else ""}
+    <div class="card" style="margin-bottom:14px">
+      <details class="toggle-section" open>
+        <summary><span class="ts-title">Criar Usuário</span><span class="ts-arrow">▶</span></summary>
+        <div class="ts-body">
+          {_ph("form-criar-usuario")}
+          <form method="post" action="/app/admin/users/create">
+            <div class="row">
+              <div class="col">
+                <label>Usuário/ID (opcional)</label>
+                <input name="access_id" placeholder="usuario ou vazio pra gerar" />
+              </div>
+              <div class="col">
+                <label>Role</label>
+                <select name="role">
+                  <option value="USER" selected>USER</option>
+                  <option value="ADMIN">ADMIN</option>
+                </select>
+              </div>
+            </div>
+            <div class="row" style="margin-top: 8px">
+              <div class="col">
+                <label>Senha (mínimo 6, vazio = 000000)</label>
+                <input name="password" type="password" placeholder="000000" />
+              </div>
+              <div class="col">
+                <label>Email interno (opcional)</label>
+                <input name="email" placeholder="opcional" />
+              </div>
+            </div>
+            <div style="margin-top:12px">
+              <button class="btn" type="submit">Criar usuário</button>
+            </div>
+          </form>
+        </div>
+      </details>
+    </div>
     <div class="card">
-      {_ph("form-criar-usuario")}
-      <h2>Admin · Usuários</h2>
-      <p class="muted">{msg}</p>
-      <div class="card">
-        <form method="post" action="/app/admin/users/create">
-          <div class="row">
-            <div class="col">
-              <label>Usuário/ID (opcional)</label>
-              <input name="access_id" placeholder="usuario ou vazio pra gerar" />
-            </div>
-            <div class="col">
-              <label>Role</label>
-              <select name="role">
-                <option value="USER" selected>USER</option>
-                <option value="ADMIN">ADMIN</option>
-              </select>
-            </div>
-          </div>
-          <div class="row" style="margin-top: 8px">
-            <div class="col">
-              <label>Senha (mínimo 6, vazio = 000000)</label>
-              <input name="password" type="password" placeholder="000000" />
-            </div>
-            <div class="col">
-              <label>Email interno (opcional)</label>
-              <input name="email" placeholder="opcional" />
-            </div>
-          </div>
-          <div style="margin-top:12px">
-            <button class="btn" type="submit">Criar usuário</button>
-          </div>
-        </form>
-      </div>
-      {_ph("tabela-usuarios-admin")}
-      <table>
-        <thead><tr><th>Usuário/ID</th><th>Email</th><th>Role</th><th>Criado</th><th></th></tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
+      <details class="toggle-section" open>
+        <summary><span class="ts-title">Usuários <span class="ts-badge">{len(users)}</span></span><span class="ts-arrow">▶</span></summary>
+        <div class="ts-body">
+          {_ph("tabela-usuarios-admin")}
+          <table>
+            <thead><tr><th>Usuário/ID</th><th>Email</th><th>Role</th><th>Criado</th><th></th></tr></thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>
+      </details>
     </div>
     """
     return _layout("Administração", body, user=_admin)
