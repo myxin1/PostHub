@@ -1142,17 +1142,43 @@ _NEW_BOT_WIZARD_HTML = """
     <!-- Scrollable body -->
     <div id="wz-body">
 
-      <!-- Step 1: Nome -->
+      <!-- Step 1: Nome + Emote -->
       <div id="wz-step-1" class="wz-step">
-        <div style="font-size:34px;margin-bottom:8px">🤖</div>
+        <div id="wz-emote-preview" style="font-size:34px;margin-bottom:8px;cursor:pointer;transition:transform .15s" title="Clique para trocar o emote" onclick="document.getElementById('wz-emote-picker').style.display=document.getElementById('wz-emote-picker').style.display==='none'?'flex':'none'">🤖</div>
         <h2 style="margin:0 0 5px;font-size:19px;font-weight:800;color:var(--text)">Nome do Projeto</h2>
-        <p style="margin:0 0 14px;font-size:13px;color:var(--muted)">Vamos começar! Dê um nome para identificar este robô.</p>
+        <p style="margin:0 0 14px;font-size:13px;color:var(--muted)">Vamos começar! Dê um nome e escolha um emote para identificar este robô.</p>
         <div class="wz-hint">💡 <b>Dica:</b> Use um nome que identifique o blog ou canal. Ex: <em>Blog de Receitas</em>, <em>Notícias Tech</em>, <em>Meu Site</em></div>
         <label class="wz-label">NOME DO PROJETO *</label>
         <input id="wz-name" class="wz-input" type="text" placeholder="Ex: Blog de Receitas" autocomplete="off"
           oninput="document.getElementById('wz-name-err').style.display='none'"
           onkeydown="if(event.key==='Enter')wzNext()" />
         <div id="wz-name-err" style="display:none;color:#ef4444;font-size:12px;margin-top:7px">⚠ Informe o nome do projeto para continuar.</div>
+        <label class="wz-label" style="margin-top:14px">EMOTE DO PROJETO</label>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <div id="wz-emote-selected" style="width:40px;height:40px;border-radius:10px;background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">🤖</div>
+          <button type="button" onclick="document.getElementById('wz-emote-picker').style.display=document.getElementById('wz-emote-picker').style.display==='none'?'flex':'none'" style="background:none;border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--muted)">Escolher emote ▾</button>
+        </div>
+        <div id="wz-emote-picker" style="display:none;flex-wrap:wrap;gap:6px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:6px">
+          <script>
+          (function(){
+            var emotes=['🤖','🚀','📝','⚡','🌟','💡','🎯','📊','🔥','🌍','🎨','💼','📰','🍕','🌿','🏋','🎵','🏆','💻','🛒','✈','🏠','🌙','☀','🦁','🐉','🌺','🧠','🔮','💎'];
+            var d=document.getElementById('wz-emote-picker');
+            emotes.forEach(function(e){
+              var b=document.createElement('button');
+              b.type='button';b.textContent=e;
+              b.style='background:none;border:1px solid var(--border);border-radius:7px;width:36px;height:36px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .12s';
+              b.onmouseenter=function(){this.style.background='var(--surface2)'};
+              b.onmouseleave=function(){this.style.background='none'};
+              b.onclick=function(){
+                document.getElementById('wz-emote-selected').textContent=e;
+                document.getElementById('wz-emote-preview').textContent=e;
+                document.getElementById('wz-emote-picker').style.display='none';
+              };
+              d.appendChild(b);
+            });
+          })();
+          </script>
+        </div>
       </div>
 
       <!-- Step 2: WordPress -->
@@ -1236,6 +1262,7 @@ _NEW_BOT_WIZARD_HTML = """
   <input type="hidden" name="wp_app_password" id="wz-form-wp-pass" />
   <input type="hidden" name="gemini_api_key"  id="wz-form-gemini" />
   <input type="hidden" name="gemini_model"    id="wz-form-gemini-model" />
+  <input type="hidden" name="emoji"           id="wz-form-emoji" value="🤖" />
 </form>
 
 <script>
@@ -1304,11 +1331,12 @@ _NEW_BOT_WIZARD_HTML = """
 
   function _buildSummary() {
     var name   = (document.getElementById('wz-name').value || '').trim();
+    var emoji  = (document.getElementById('wz-emote-selected').textContent || '🤖').trim();
     var wpUrl  = (document.getElementById('wz-wp-url').value || '').trim();
     var wpUser = (document.getElementById('wz-wp-user').value || '').trim();
     var gem    = (document.getElementById('wz-gemini-key').value || '').trim();
     var rows   = '';
-    rows += _row('🤖', 'Projeto',   name || '<em style="color:#ef4444">Não informado</em>', !!name);
+    rows += _row(emoji, 'Projeto',   name || '<em style="color:#ef4444">Não informado</em>', !!name);
     rows += (wpUrl && wpUser)
       ? _row('🔵', 'WordPress', wpUrl + ' <span style="opacity:.7;font-weight:400">(@' + wpUser + ')</span>', true)
       : _row('🔧', 'WordPress', '<span style="opacity:.6;font-weight:400">Não configurado — adicione depois</span>', false);
@@ -1336,6 +1364,7 @@ _NEW_BOT_WIZARD_HTML = """
     document.getElementById('wz-form-wp-pass').value       = (document.getElementById('wz-wp-pass').value || '').trim();
     document.getElementById('wz-form-gemini').value        = (document.getElementById('wz-gemini-key').value || '').trim();
     document.getElementById('wz-form-gemini-model').value  = (document.getElementById('wz-gemini-model').value || 'gemini-1.5-flash-latest');
+    document.getElementById('wz-form-emoji').value         = (document.getElementById('wz-emote-selected').textContent || '🤖').trim();
     document.getElementById('wz-form').submit();
   }
 
@@ -1554,6 +1583,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     for pr in all_profiles:
         is_active = pr.id == bot.id
         wp_url, p_done, p_fail, p_pend = _proj_stats(pr)
+        pr_emoji = (pr.publish_config_json or {}).get("emoji") or "🤖"
 
         # Badge de status
         if is_active:
@@ -1599,7 +1629,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
         <div style='display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:12px;{card_style}flex-wrap:wrap'>
           <div style='display:flex;align-items:center;gap:10px;min-width:160px'>
             <div style='width:36px;height:36px;border-radius:10px;background:{"linear-gradient(135deg,var(--primary),var(--pink))" if is_active else "var(--surface)"};
-              display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0'>🤖</div>
+              display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0'>{pr_emoji}</div>
             <div>
               <div style='font-size:15px;font-weight:700;color:var(--text)'>{html.escape(pr.name)}</div>
               {status_badge}
@@ -1635,16 +1665,19 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
 
     {_ph("active-project-banner")}
     <div class="active-project-banner" style="margin-bottom:14px">
-      <div>
-        <div class="active-project-label">Projeto ativo</div>
-        <div class="active-project-name">{html.escape(bot.name)}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
-          <span class="active-project-stat" style="border-color:{wp_status_color};color:{wp_status_color}">
-            <b>WP:</b> {wp_status_label}
-          </span>
-          <span class="active-project-stat" style="border-color:{'#10b981' if gemini_ok else '#ef4444'};color:{'#10b981' if gemini_ok else '#ef4444'}">
-            <b>Gemini:</b> {gemini_status}
-          </span>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--primary),var(--pink));display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">{html.escape((bot.publish_config_json or {}).get('emoji') or '🤖')}</div>
+        <div>
+          <div class="active-project-label">Projeto ativo</div>
+          <div class="active-project-name">{html.escape(bot.name)}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+            <span class="active-project-stat" style="border-color:{wp_status_color};color:{wp_status_color}">
+              <b>WP:</b> {wp_status_label}
+            </span>
+            <span class="active-project-stat" style="border-color:{'#10b981' if gemini_ok else '#ef4444'};color:{'#10b981' if gemini_ok else '#ef4444'}">
+              <b>Gemini:</b> {gemini_status}
+            </span>
+          </div>
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1958,10 +1991,12 @@ def profiles_create_wizard(
     wp_app_password: str = Form(""),
     gemini_api_key: str = Form(""),
     gemini_model: str = Form("gemini-1.5-flash-latest"),
+    emoji: str = Form("🤖"),
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    p = AutomationProfile(user_id=user.id, name=name.strip(), active=True, schedule_config_json={}, anti_block_config_json={})
+    safe_emoji = (emoji or "🤖").strip() or "🤖"
+    p = AutomationProfile(user_id=user.id, name=name.strip(), active=True, schedule_config_json={}, anti_block_config_json={}, publish_config_json={"emoji": safe_emoji})
     db.add(p)
     db.flush()
 
