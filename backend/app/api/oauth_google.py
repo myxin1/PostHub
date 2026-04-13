@@ -28,12 +28,25 @@ def _oauth() -> OAuth:
     return oauth
 
 
+def _callback_uri(request: Request) -> str:
+    """Build the OAuth callback URI, forcing https in production."""
+    import os
+    base = os.getenv("BASE_URL", "").rstrip("/")
+    if base:
+        return f"{base}/app/auth/google/callback"
+    uri = str(request.url_for("google_callback"))
+    # Vercel terminates SSL at the edge; ensure https
+    if uri.startswith("http://"):
+        uri = "https://" + uri[len("http://"):]
+    return uri
+
+
 @router.get("/app/login/google", include_in_schema=False)
 async def google_login(request: Request):
     if not settings.google_client_id or not settings.google_client_secret:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="google_oauth_not_configured")
     oauth = _oauth()
-    redirect_uri = str(request.url_for("google_callback"))
+    redirect_uri = _callback_uri(request)
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
@@ -42,7 +55,8 @@ async def google_callback(request: Request, db=Depends(get_db)):
     if not settings.google_client_id or not settings.google_client_secret:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="google_oauth_not_configured")
     oauth = _oauth()
-    token = await oauth.google.authorize_access_token(request)
+    # Pass the same redirect_uri used in the login step
+    token = await oauth.google.authorize_access_token(request, redirect_uri=_callback_uri(request))
     userinfo = token.get("userinfo") or {}
     email = str(userinfo.get("email") or "").strip().lower()
     if not email:

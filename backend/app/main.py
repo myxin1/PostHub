@@ -28,6 +28,10 @@ from app.web import router as web_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="PostHub")
+    # Trust proxy headers (X-Forwarded-Proto, X-Forwarded-For) from Vercel/reverse proxies
+    # so that request.url uses https:// instead of http://
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.isdir(static_dir):
