@@ -269,16 +269,21 @@ def _base_css() -> str:
         linear-gradient(180deg, var(--bg), var(--bg2));
     }
     a { color: inherit; text-decoration: none; }
-    .app { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
+    .app { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; transition: grid-template-columns .25s; }
+    .app.sidebar-collapsed { grid-template-columns: 0 1fr; }
     .sidebar {
       position: sticky;
       top: 0;
       height: 100vh;
+      width: 280px;
       padding: 20px 16px;
       border-right: 1px solid var(--border);
       background: var(--sidebar-bg);
       backdrop-filter: blur(12px);
+      overflow: hidden;
+      transition: width .25s, padding .25s, border .25s;
     }
+    .app.sidebar-collapsed .sidebar { width: 0; padding: 0; border: none; }
     .brand {
       display: flex;
       align-items: center;
@@ -347,7 +352,7 @@ def _base_css() -> str:
       background: rgba(18, 16, 28, 0.50);
     }
     .sidebar-footer .muted { color: var(--muted); font-size: 12px; margin: 0; }
-    .main { padding: 24px 24px 40px; }
+    .main { padding: 24px 32px 40px; min-width: 0; }
     .topbar {
       display: flex;
       align-items: center;
@@ -356,7 +361,7 @@ def _base_css() -> str:
     }
     .title { font-size: 18px; margin: 0; letter-spacing: 0.2px; }
     .muted { color: var(--muted); }
-    .content { max-width: 1120px; }
+    .content { max-width: 1600px; width: 100%; }
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -386,30 +391,52 @@ def _base_css() -> str:
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 10px;
-      padding: 12px 14px;
-      border-radius: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      gap: 8px;
+      padding: 10px 18px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
       background: linear-gradient(135deg, var(--primary), var(--pink));
       color: white;
       cursor: pointer;
       font-weight: 600;
+      font-size: 13px;
       letter-spacing: 0.2px;
-      box-shadow: 0 14px 40px rgba(139, 92, 246, 0.18);
+      box-shadow: 0 4px 14px rgba(139, 92, 246, 0.28), 0 1px 3px rgba(0,0,0,.12);
+      transition: transform .15s ease, box-shadow .15s ease, filter .15s ease, background .15s ease;
+      white-space: nowrap;
     }
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 22px rgba(139, 92, 246, 0.38), 0 2px 6px rgba(0,0,0,.16);
+      filter: brightness(1.08);
+    }
+    .btn:active { transform: translateY(0); filter: brightness(.96); }
     .btn.dirty {
       border-color: rgba(245, 158, 11, 0.55);
       box-shadow:
         0 0 0 4px rgba(245, 158, 11, 0.16),
-        0 14px 40px rgba(245, 158, 11, 0.18);
+        0 6px 18px rgba(245, 158, 11, 0.22);
       filter: brightness(1.06);
     }
     .btn.secondary {
       background: rgba(18, 16, 28, 0.45);
       color: rgba(249, 250, 251, 0.90);
-      box-shadow: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,.12);
+      border: 1px solid var(--border2);
     }
-    .btn:hover { filter: brightness(1.05); }
+    .btn.secondary:hover {
+      background: rgba(18, 16, 28, 0.65);
+      border-color: var(--primary);
+      box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    }
+    .sidebar-toggle-btn {
+      background: none; border: 1px solid var(--border); border-radius: 10px;
+      cursor: pointer; padding: 7px 10px; color: var(--muted); font-size: 17px;
+      display: flex; align-items: center; justify-content: center; line-height: 1;
+      transition: background .15s, color .15s, border-color .15s;
+      flex-shrink: 0;
+    }
+    .sidebar-toggle-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom: 1px solid var(--border); padding: 12px 10px; text-align: left; vertical-align: top; color: var(--text); }
     th { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
@@ -529,10 +556,11 @@ def _base_css() -> str:
     .notif-item-sub { font-size:11px; color:var(--muted); margin-top:2px; }
     .notif-dd-empty { padding:28px 16px; text-align:center; color:var(--muted); font-size:13px; }
     @media (max-width: 900px) {
-      .app { grid-template-columns: 1fr; }
-      .sidebar { position: relative; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+      .app { grid-template-columns: 1fr !important; }
+      .sidebar { position: relative; height: auto; width: auto !important; border-right: none; border-bottom: 1px solid var(--border); overflow: visible !important; padding: 16px !important; }
+      .app.sidebar-collapsed .sidebar { display: none; }
       .sidebar-footer { position: relative; left: 0; right: 0; bottom: 0; margin-top: 12px; }
-      .main { padding: 18px; }
+      .main { padding: 16px; }
       .grid2 { grid-template-columns: 1fr; }
     }
     """
@@ -588,8 +616,8 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
   </script>
 </head>
 <body>
-  <div class="app">
-    <aside class="sidebar">
+  <div class="app" id="app-root">
+    <aside class="sidebar" id="sidebar">
       <img class="brand-logo-wide" src="/brand/logo_posthub.png" alt="PostHub" onerror="this.onerror=null;this.src='/static/logo.svg';" style="margin-bottom:14px;" />
       <div class="brand">
         <div class="logo">PH</div>
@@ -614,7 +642,10 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     </aside>
     <main class="main">
       <div class="topbar">
-        <h2 class="title">{t}</h2>
+        <div style="display:flex;align-items:center;gap:12px">
+          <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" title="Ocultar/Mostrar barra lateral" onclick="toggleSidebar()">☰</button>
+          <h2 class="title">{t}</h2>
+        </div>
         <div class="theme-bar" style="display:flex;align-items:center;gap:8px">
           <div class="notif-wrap" id="notif-wrap">
             <button class="notif-bell-btn" id="notif-bell" title="Notificações" aria-label="Notificações">
@@ -833,6 +864,23 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
 
       _fetchFeed();
       setInterval(_fetchFeed, 20000);
+    }})();
+
+    // ── Sidebar toggle ──────────────────────────────────────────────────────
+    (function() {{
+      function toggleSidebar() {{
+        var app = document.getElementById('app-root');
+        if (!app) return;
+        var collapsed = app.classList.toggle('sidebar-collapsed');
+        localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '0');
+        var btn = document.getElementById('sidebar-toggle-btn');
+        if (btn) btn.title = collapsed ? 'Mostrar barra lateral' : 'Ocultar barra lateral';
+      }}
+      window.toggleSidebar = toggleSidebar;
+      if (localStorage.getItem('sidebar-collapsed') === '1') {{
+        var app = document.getElementById('app-root');
+        if (app) app.classList.add('sidebar-collapsed');
+      }}
     }})();
 
     // ── Placeholder visibility persistence ──────────────────────────────────
@@ -1633,29 +1681,28 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
         )
 
         proj_rows += f"""
-        <div style='display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:12px;{card_style}flex-wrap:wrap'>
-          <div style='display:flex;align-items:center;gap:10px;min-width:160px'>
-            <div style='width:36px;height:36px;border-radius:10px;background:{"linear-gradient(135deg,var(--primary),var(--pink))" if is_active else "var(--surface)"};
-              display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0'>{pr_emoji}</div>
-            <div>
-              <div style='font-size:15px;font-weight:700;color:var(--text)'>{html.escape(pr.name)}</div>
-              {status_badge}
+        <tr class="{'proj-row-active' if is_active else ''}">
+          <td style="padding:12px 14px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="width:34px;height:34px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px;background:{'linear-gradient(135deg,var(--primary),var(--pink))' if is_active else 'var(--surface2)'}">{pr_emoji}</div>
+              <div>
+                <div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap">{html.escape(pr.name)}</div>
+                <div style="margin-top:3px">{status_badge}</div>
+              </div>
             </div>
-          </div>
-          <div style='flex:1;min-width:140px'>
-            {wp_info}
-          </div>
-          <div style='display:flex;gap:16px;text-align:center'>
-            <div><div style='font-size:18px;font-weight:800;color:#10b981'>{p_done}</div><div style='font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px'>Public.</div></div>
-            <div><div style='font-size:18px;font-weight:800;color:var(--muted)'>{p_pend}</div><div style='font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px'>Pend.</div></div>
-            <div><div style='font-size:18px;font-weight:800;color:#ef4444'>{p_fail}</div><div style='font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px'>Falhas</div></div>
-          </div>
-          <div style='display:flex;gap:6px;align-items:center;flex-shrink:0'>
-            {usar_btn}
-            {config_btn}
-            {del_btn}
-          </div>
-        </div>"""
+          </td>
+          <td style="padding:12px 10px;max-width:220px">{wp_info}</td>
+          <td style="padding:12px 10px;white-space:nowrap">
+            <div style="display:flex;gap:14px">
+              <div style="text-align:center"><div style="font-size:16px;font-weight:800;color:#10b981">{p_done}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Public.</div></div>
+              <div style="text-align:center"><div style="font-size:16px;font-weight:800;color:var(--muted)">{p_pend}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pend.</div></div>
+              <div style="text-align:center"><div style="font-size:16px;font-weight:800;color:#ef4444">{p_fail}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Falhas</div></div>
+            </div>
+          </td>
+          <td style="padding:12px 10px">
+            <div style="display:flex;gap:6px;align-items:center">{usar_btn} {config_btn} {del_btn}</div>
+          </td>
+        </tr>"""
 
     # _ph definido no nível de módulo
 
@@ -1701,10 +1748,22 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
           <span class="ts-title">Projetos / Robôs <span class="ts-badge">{len(all_profiles)}</span></span>
           <span class="ts-arrow">▶</span>
         </summary>
-        <div class="ts-body">
+        <div class="ts-body" style="padding-top:0">
           {_ph("tabela-projetos")}
-          <div style="display:flex;flex-direction:column;gap:10px">
-            {proj_rows}
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse">
+              <thead>
+                <tr>
+                  <th style="padding:10px 14px;text-align:left">Projeto</th>
+                  <th style="padding:10px 10px;text-align:left">WordPress</th>
+                  <th style="padding:10px 10px;text-align:left">Publicações</th>
+                  <th style="padding:10px 10px;text-align:left">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proj_rows}
+              </tbody>
+            </table>
           </div>
         </div>
       </details>
