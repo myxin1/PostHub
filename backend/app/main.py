@@ -40,21 +40,41 @@ def create_app() -> FastAPI:
     if os.path.isdir(brand_dir):
         app.mount("/brand", StaticFiles(directory=brand_dir), name="brand")
 
+    _startup_error: list[str] = []
+
     @app.on_event("startup")
     async def _startup():
         try:
             Base.metadata.create_all(bind=engine)
+            _sqlite_auto_migrate()
+            _seed_admin_user()
         except Exception as exc:  # noqa: BLE001
-            import logging
-            logging.getLogger("posthub").warning("DB create_all failed: %s", exc)
+            import traceback
+            _startup_error.append(traceback.format_exc())
+
+    @app.get("/api/setup", include_in_schema=False)
+    def _setup():
+        """Force DB setup — call once after deploy to create tables and seed admin."""
+        from fastapi.responses import PlainTextResponse
+        log = []
+        try:
+            Base.metadata.create_all(bind=engine)
+            log.append("OK: create_all")
+        except Exception as exc:
+            log.append(f"ERR create_all: {exc}")
         try:
             _sqlite_auto_migrate()
-        except Exception:
-            pass
+            log.append("OK: migrate")
+        except Exception as exc:
+            log.append(f"ERR migrate: {exc}")
         try:
             _seed_admin_user()
-        except Exception:
-            pass
+            log.append("OK: seed_admin")
+        except Exception as exc:
+            log.append(f"ERR seed_admin: {exc}")
+        if _startup_error:
+            log.append(f"Startup error: {_startup_error[0]}")
+        return PlainTextResponse("\n".join(log))
         if os.getenv("POSTHUB_INLINE_WORKER", "0") == "1":
             worker_id = f"inline:{socket.gethostname()}:{os.getpid()}"
 

@@ -58,10 +58,8 @@ async def google_callback(request: Request, db=Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="google_oauth_not_configured")
     oauth = _oauth()
     try:
-        # Pass the same redirect_uri used in the login step
-        token = await oauth.google.authorize_access_token(request, redirect_uri=_callback_uri(request))
+        token = await oauth.google.authorize_access_token(request)
     except Exception as exc:
-        import traceback
         return RedirectResponse(
             f"/app/login?msg=Erro+OAuth:+{str(exc)[:120]}",
             status_code=status.HTTP_302_FOUND,
