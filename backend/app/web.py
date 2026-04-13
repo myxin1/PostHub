@@ -531,6 +531,55 @@ def _base_css() -> str:
     .badge-inactive .dot-off { width:8px; height:8px; border-radius:999px; background:var(--muted); opacity:.4; flex-shrink:0; }
     tr.proj-row-active td { background:rgba(16,185,129,.06); border-bottom-color:rgba(16,185,129,.12); }
     tr.proj-row-active td:first-child { border-left:3px solid #10b981; padding-left:10px; }
+    /* ── diagnostic modal ── */
+    .diag-overlay {
+      display:none; position:fixed; inset:0; z-index:10000;
+      background:rgba(0,0,0,.55); backdrop-filter:blur(4px);
+      align-items:center; justify-content:center; padding:20px;
+    }
+    .diag-overlay.open { display:flex; }
+    .diag-modal {
+      background:var(--bg2); border:1px solid var(--border);
+      border-radius:20px; box-shadow:0 24px 64px rgba(0,0,0,.38);
+      width:min(520px,100%); max-height:90vh; overflow-y:auto;
+      display:flex; flex-direction:column;
+    }
+    .diag-header {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 22px 14px; border-bottom:1px solid var(--border);
+    }
+    .diag-header h3 { margin:0; font-size:16px; }
+    .diag-close {
+      background:none; border:none; cursor:pointer; color:var(--muted);
+      font-size:20px; padding:4px 8px; border-radius:8px; line-height:1;
+      transition:background .15s, color .15s;
+    }
+    .diag-close:hover { background:var(--surface2); color:var(--text); }
+    .diag-body { padding:18px 22px; display:flex; flex-direction:column; gap:12px; }
+    .diag-item {
+      display:flex; align-items:flex-start; gap:12px;
+      padding:14px 16px; border-radius:14px;
+      border:1px solid var(--border); background:var(--surface2);
+    }
+    .diag-item.ok { border-color:rgba(16,185,129,.35); background:rgba(16,185,129,.07); }
+    .diag-item.err { border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.07); }
+    .diag-item.warn { border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.07); }
+    .diag-item.loading { opacity:.6; }
+    .diag-dot {
+      width:32px; height:32px; border-radius:50%; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center; font-size:15px;
+    }
+    .diag-item.ok .diag-dot { background:rgba(16,185,129,.18); color:#10b981; }
+    .diag-item.err .diag-dot { background:rgba(239,68,68,.15); color:#ef4444; }
+    .diag-item.warn .diag-dot { background:rgba(245,158,11,.15); color:#f59e0b; }
+    .diag-item.loading .diag-dot { background:var(--surface); color:var(--muted); }
+    .diag-label { font-size:13px; font-weight:700; margin-bottom:3px; }
+    .diag-desc { font-size:12px; color:var(--muted); line-height:1.5; }
+    .diag-desc a { color:var(--primary); font-weight:600; }
+    .diag-footer {
+      padding:14px 22px 18px; border-top:1px solid var(--border);
+      display:flex; gap:10px; justify-content:flex-end;
+    }
     .robot-actions { display:flex; flex-direction:column; gap:8px; }
     .robot-action-card {
       display:flex; align-items:center; gap:14px;
@@ -1893,10 +1942,8 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
               </div>
               {"<form method='post' action='/app/robot/stop' style='margin-left:auto'><button class='btn' type='submit' style='white-space:nowrap;min-width:110px;justify-content:center;background:#10b981;border-color:#10b981;color:#fff;box-shadow:0 0 12px rgba(16,185,129,.4)'>● ATIVO</button></form>"
               if in_progress else
-              f"""<div style="margin-left:auto">
-                {"<form method='post' action='/app/robot/start'><button class='btn' type='submit' style='white-space:nowrap;min-width:110px;justify-content:center'>▶ Iniciar</button></form>"
-                if wp_configured else
-                f"<button class='btn' type='button' style='white-space:nowrap;min-width:110px;justify-content:center' onclick=\"var e=document.getElementById('wp-error-msg');e.style.display=e.style.display==='none'?'block':'none'\">▶ Iniciar</button>"}
+              """<div style="margin-left:auto">
+                <button class='btn' type='button' id='btn-iniciar-diag' style='white-space:nowrap;min-width:110px;justify-content:center' onclick='openDiagModal()'>▶ Iniciar</button>
               </div>"""}
             </div>
             {f'''{_ph("botao-rodar-agora")}<div class="robot-action-card">
@@ -1962,6 +2009,65 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
       </details>
     </div>
     """
+    diag_modal = f"""
+    <div class="diag-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagModal()">
+      <div class="diag-modal" style="padding:22px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+          <div style="font-weight:700;font-size:17px">Diagnóstico antes de iniciar</div>
+          <button onclick="closeDiagModal()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
+        </div>
+        <div id="diagItems" style="display:flex;flex-direction:column;gap:10px;min-height:80px">
+          <div style="text-align:center;padding:32px;color:var(--muted)">
+            <div style="font-size:28px;margin-bottom:8px">⏳</div>
+            Verificando configurações...
+          </div>
+        </div>
+        <div id="diagFooter" style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end"></div>
+      </div>
+    </div>
+    <form id="diagStartForm" method="post" action="/app/robot/start" style="display:none"></form>
+    <script>
+    function openDiagModal(){{
+      var overlay = document.getElementById('diagOverlay');
+      overlay.classList.add('open');
+      document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:28px;margin-bottom:8px">⏳</div>Verificando configurações...</div>';
+      document.getElementById('diagFooter').innerHTML = '';
+      fetch('/app/robot/diagnose')
+        .then(function(r){{ return r.json(); }})
+        .then(function(data){{
+          var icons = {{ok:'✅', warn:'⚠️', err:'❌'}};
+          var html = '';
+          data.results.forEach(function(item){{
+            html += '<div class="diag-item ' + item.status + '" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
+            html += '<div style="display:flex;align-items:flex-start;gap:10px">';
+            html += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">' + (icons[item.status]||'•') + '</span>';
+            html += '<div style="flex:1">';
+            html += '<div style="font-weight:600;font-size:14px;margin-bottom:3px">' + item.label + '</div>';
+            if(item.desc) html += '<div style="font-size:12px;color:var(--muted);line-height:1.4">' + item.desc + '</div>';
+            if(item.fix) html += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.12);border-radius:7px;line-height:1.5">' + item.fix + '</div>';
+            html += '</div></div></div>';
+          }});
+          document.getElementById('diagItems').innerHTML = html;
+          var footer = '';
+          footer += '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
+          if(data.can_start){{
+            footer += '<button type="button" class="btn" onclick="document.getElementById(\'diagStartForm\').submit()" style="min-width:110px;background:#10b981;border-color:#10b981;color:#fff">▶ Iniciar</button>';
+          }} else {{
+            footer += '<button type="button" class="btn" disabled style="min-width:110px;opacity:.45;cursor:not-allowed">▶ Iniciar</button>';
+          }}
+          document.getElementById('diagFooter').innerHTML = footer;
+        }})
+        .catch(function(){{
+          document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">Erro ao verificar. Tente novamente.</div>';
+          document.getElementById('diagFooter').innerHTML = '<button type="button" class="btn secondary" onclick="closeDiagModal()">Fechar</button>';
+        }});
+    }}
+    function closeDiagModal(){{
+      document.getElementById('diagOverlay').classList.remove('open');
+    }}
+    </script>
+    """
+    body = body + diag_modal
     return _layout("Robô", body, user=user)
 
 
@@ -2015,6 +2121,99 @@ def robot_start(user: User = Depends(get_current_user), db=Depends(get_db)):
     )
     db.commit()
     return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/app/robot/diagnose", include_in_schema=False)
+def robot_diagnose(user: User = Depends(get_current_user), db=Depends(get_db)):
+    """Diagnóstico rápido: verifica WP credentials + fontes antes de iniciar."""
+    from fastapi.responses import JSONResponse
+    import base64 as _b64
+    bot = _get_or_create_single_bot(db, user=user)
+    results = []
+
+    # ── 1. WordPress ────────────────────────────────────────────
+    wp_integ = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.WORDPRESS))
+    if not wp_integ:
+        results.append({"key": "wordpress", "status": "err", "label": "WordPress não configurado",
+                        "desc": "Nenhuma integração WordPress encontrada.",
+                        "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e adicione URL, usuário e App Password."})
+    else:
+        try:
+            wp_creds = decrypt_json(wp_integ.credentials_encrypted)
+            base_url = (wp_creds.get("base_url") or "").rstrip("/")
+            users = wp_creds.get("users") if isinstance(wp_creds.get("users"), list) else []
+            if not users and wp_creds.get("username"):
+                users = [{"username": wp_creds["username"], "app_password": wp_creds.get("app_password", "")}]
+            active_uname = str(wp_creds.get("active_username") or "")
+            active_user = next((u for u in users if u.get("username") == active_uname), users[0] if users else None)
+
+            if not base_url:
+                results.append({"key": "wordpress", "status": "err", "label": "URL do site não informada",
+                                 "desc": "O campo Base URL está vazio.",
+                                 "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e preencha a URL do site."})
+            elif not active_user or not active_user.get("username") or not active_user.get("app_password"):
+                results.append({"key": "wordpress", "status": "err", "label": "Usuário WordPress sem credenciais",
+                                 "desc": "Usuário ou App Password estão vazios.",
+                                 "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e adicione o App Password."})
+            else:
+                # Testa conexão real com a API do WordPress
+                import httpx as _httpx
+                token = _b64.b64encode(f"{active_user['username']}:{active_user['app_password']}".encode()).decode()
+                test_url = f"{base_url}/wp-json/wp/v2/users/me"
+                try:
+                    resp = _httpx.get(test_url, headers={"Authorization": f"Basic {token}"}, timeout=8, follow_redirects=True, verify=False)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        display_name = data.get("name") or active_user["username"]
+                        roles = data.get("roles") or []
+                        if not any(r in roles for r in ("administrator", "editor", "author")):
+                            results.append({"key": "wordpress", "status": "warn", "label": f"WordPress conectado — {display_name}",
+                                             "desc": f"Usuário autenticado mas pode não ter permissão para publicar (role: {', '.join(roles) or 'desconhecido'}).",
+                                             "fix": "Use um usuário com role <b>Administrator</b> ou <b>Editor</b>."})
+                        else:
+                            results.append({"key": "wordpress", "status": "ok", "label": f"WordPress OK — {display_name}",
+                                             "desc": f"Conectado em <b>{base_url}</b> com role <b>{', '.join(roles)}</b>."})
+                    elif resp.status_code == 401:
+                        results.append({"key": "wordpress", "status": "err", "label": "Credenciais inválidas",
+                                         "desc": f"O WordPress retornou 401 Unauthorized para o usuário <b>{active_user['username']}</b>.",
+                                         "fix": f"Gere um novo App Password em <b>{base_url}/wp-admin/profile.php</b> e atualize em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações</a>."})
+                    elif resp.status_code == 403:
+                        results.append({"key": "wordpress", "status": "err", "label": "Acesso bloqueado (403)",
+                                         "desc": "O WordPress negou o acesso. A API REST pode estar desativada ou bloqueada por plugin de segurança.",
+                                         "fix": "Verifique se a REST API está ativa. Plugins como Wordfence ou iThemes Security podem bloqueá-la."})
+                    else:
+                        results.append({"key": "wordpress", "status": "warn", "label": f"WordPress respondeu {resp.status_code}",
+                                         "desc": f"Resposta inesperada de {base_url}.",
+                                         "fix": "Verifique se a URL está correta e se o WordPress está online."})
+                except Exception as e:
+                    results.append({"key": "wordpress", "status": "err", "label": "WordPress inacessível",
+                                     "desc": f"Não foi possível conectar em <b>{base_url}</b>: {str(e)[:120]}",
+                                     "fix": "Verifique se a URL está correta e se o site está no ar."})
+        except Exception as e:
+            results.append({"key": "wordpress", "status": "err", "label": "Erro ao ler credenciais",
+                             "desc": str(e)[:120], "fix": "Reconfigure a integração WordPress."})
+
+    # ── 2. Fontes ───────────────────────────────────────────────
+    sources = list(db.scalars(select(Source).where(Source.profile_id == bot.id, Source.active.is_(True))))
+    if not sources:
+        results.append({"key": "sources", "status": "err", "label": "Nenhuma fonte configurada",
+                         "desc": "O robô precisa de ao menos uma fonte (URL, RSS ou Palavra-chave) para buscar conteúdo.",
+                         "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=fontes'>Configurar → Fontes</a> e adicione uma fonte."})
+    else:
+        results.append({"key": "sources", "status": "ok", "label": f"{len(sources)} fonte{'s' if len(sources)!=1 else ''} configurada{'s' if len(sources)!=1 else ''}",
+                         "desc": ", ".join(f"<b>{html.escape(s.value[:40])}</b>" for s in sources[:3]) + ("..." if len(sources) > 3 else "")})
+
+    # ── 3. Gemini ───────────────────────────────────────────────
+    gem = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.GEMINI))
+    if not gem:
+        results.append({"key": "gemini", "status": "warn", "label": "Gemini não configurado",
+                         "desc": "Sem IA configurada os posts não serão reescritos.",
+                         "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → Gemini</a> e adicione sua API Key gratuita."})
+    else:
+        results.append({"key": "gemini", "status": "ok", "label": "Gemini configurado", "desc": "IA pronta para reescrever os posts."})
+
+    can_start = all(r["status"] != "err" for r in results)
+    return JSONResponse({"results": results, "can_start": can_start})
 
 
 @router.post("/app/robot/stop", include_in_schema=False)
