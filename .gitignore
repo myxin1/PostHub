@@ -28,8 +28,9 @@ backend/server.log
 .DS_Store
 Thumbs.db
 
-# Vercel
-.vercel
+# Vercel — manter project.json mas ignorar cache
+.vercel/cache
+.vercel/output
 
 # IDE
 .vscode/

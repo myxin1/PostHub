@@ -15,24 +15,4 @@ jobs:
         run: npm install -g vercel@latest
 
       - name: Deploy to Vercel
-        run: |
-          vercel deploy --prod --yes \
-            --token ${{ secrets.VERCEL_TOKEN }} \
-            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
-            -e JWT_ISSUER="posthub" \
-            -e JWT_AUDIENCE="posthub" \
-            -e ACCESS_TOKEN_TTL_SECONDS="43200" \
-            -e SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
-            -e ENCRYPTION_KEY_B64="${{ secrets.ENCRYPTION_KEY_B64 }}" \
-            -e POSTHUB_ADMIN_LOGIN="${{ secrets.POSTHUB_ADMIN_LOGIN }}" \
-            -e POSTHUB_ADMIN_EMAIL="${{ secrets.POSTHUB_ADMIN_EMAIL }}" \
-            -e POSTHUB_ADMIN_PASSWORD="${{ secrets.POSTHUB_ADMIN_PASSWORD }}" \
-            -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
-            -e GEMINI_MODEL="gemini-1.5-flash-latest" \
-            -e GOOGLE_CLIENT_ID="${{ secrets.GOOGLE_CLIENT_ID }}" \
-            -e GOOGLE_CLIENT_SECRET="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
-            -e WORDPRESS_TIMEOUT_SECONDS="30" \
-            -e HTTP_TIMEOUT_SECONDS="30" \
-            -e HTTP_INSECURE_SKIP_VERIFY="true" \
-            -e POSTHUB_INLINE_WORKER="1"
+        run: vercel deploy --prod --yes --token ${{ secrets.VERCEL_TOKEN }}
