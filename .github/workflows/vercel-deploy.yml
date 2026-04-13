@@ -17,7 +17,6 @@ jobs:
       - name: Deploy to Vercel
         run: |
           vercel deploy --prod --yes \
-            --name posthub \
             --token ${{ secrets.VERCEL_TOKEN }} \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
