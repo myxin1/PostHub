@@ -144,16 +144,17 @@ def _seed_admin_user() -> None:
     password = os.getenv("POSTHUB_ADMIN_PASSWORD") or "000000"
     if not login_id:
         login_id = "adm"
+    pw_hash = hash_password(password)
     with engine.begin() as conn:
+        # Find by email first, then fall back to any existing admin (handles email changes)
         row = conn.execute(
-            text("SELECT id, role, access_id FROM users WHERE email = :email LIMIT 1"),
-            {"email": email},
+            text("SELECT id FROM users WHERE email = :email OR (role = :role AND access_id = :aid) LIMIT 1"),
+            {"email": email, "role": UserRole.ADMIN.value, "aid": login_id},
         ).fetchone()
         if row:
-            # Always sync role, access_id and password from env vars
             conn.execute(
-                text("UPDATE users SET role = :role, access_id = :access_id, password_hash = :pw WHERE email = :email"),
-                {"role": UserRole.ADMIN.value, "access_id": login_id, "pw": hash_password(password), "email": email},
+                text("UPDATE users SET email = :email, role = :role, access_id = :aid, password_hash = :pw WHERE id = :id"),
+                {"email": email, "role": UserRole.ADMIN.value, "aid": login_id, "pw": pw_hash, "id": row[0]},
             )
             return
         conn.execute(
@@ -165,7 +166,7 @@ def _seed_admin_user() -> None:
                 "id": str(__import__("uuid").uuid4()),
                 "email": email,
                 "access_id": login_id,
-                "password_hash": hash_password(password),
+                "password_hash": pw_hash,
                 "role": UserRole.ADMIN.value,
                 "created_at": __import__("datetime").datetime.utcnow(),
             },
