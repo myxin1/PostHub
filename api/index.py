@@ -13,17 +13,26 @@ sys.path.insert(0, _BACKEND)
 # ── Env defaults ──────────────────────────────────────────────────────────────
 if not os.environ.get("DATABASE_URL"):
     os.environ["DATABASE_URL"] = "sqlite:////tmp/posthub.db"
-os.environ.setdefault("POSTHUB_INLINE_WORKER", "1")
+os.environ.setdefault("POSTHUB_INLINE_WORKER", "0")
 
 # ── Import the app — show any error clearly ───────────────────────────────────
+_app = None
+_import_tb: str | None = None
+
 try:
-    from app.main import app  # noqa: E402
+    from app.main import app as _app  # noqa: E402
 except Exception:
-    _tb = traceback.format_exc()
+    _import_tb = traceback.format_exc()
+
+if _app is not None:
+    app = _app
+else:
     from fastapi import FastAPI
     from fastapi.responses import PlainTextResponse
 
     app = FastAPI()
+
+    _tb = _import_tb or "Unknown import error"
 
     @app.get("/{path:path}")
     async def _import_error(path: str = ""):
@@ -34,5 +43,3 @@ except Exception:
             f"Traceback:\n{_tb}",
             status_code=500,
         )
-
-__all__ = ["app"]
