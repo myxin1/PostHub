@@ -212,18 +212,44 @@ def _base_css() -> str:
     [data-theme="claro"] .brand,[data-theme="rosa"] .brand,[data-theme="ceu"] .brand { background: var(--surface2); }
     [data-theme="claro"] .sidebar-footer,[data-theme="rosa"] .sidebar-footer,[data-theme="ceu"] .sidebar-footer { background: var(--surface2); }
 
-    /* Topbar theme dropdown */
-    .theme-bar { display:flex; align-items:center; gap:8px; position:relative; }
-    .theme-bar label { font-size:12px; color:var(--muted); white-space:nowrap; }
-    .theme-select {
-      appearance:none; -webkit-appearance:none;
-      padding:6px 28px 6px 10px; border-radius:10px;
+    /* Dev Menu */
+    .dev-menu-wrap { position:relative; }
+    .dev-menu-btn {
+      display:inline-flex; align-items:center; gap:6px;
+      padding:6px 13px; border-radius:10px;
       border:1px solid var(--border2); background:var(--surface);
       color:var(--text); font-size:13px; font-family:inherit; cursor:pointer;
-      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
-      background-repeat:no-repeat; background-position:right 9px center;
+      transition:background .15s, border-color .15s;
     }
-    .theme-select:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(139,92,246,.15); }
+    .dev-menu-btn:hover { background:var(--surface2); border-color:var(--primary); }
+    .dev-menu-btn.open { border-color:var(--primary); box-shadow:0 0 0 3px rgba(139,92,246,.15); }
+    .dev-menu-dd {
+      display:none; position:absolute; top:calc(100% + 8px); right:0; z-index:9999;
+      background:var(--bg2); border:1px solid var(--border2);
+      border-radius:16px; box-shadow:0 16px 48px rgba(0,0,0,.35);
+      padding:14px; min-width:260px;
+    }
+    .dev-menu-dd.open { display:flex; flex-direction:column; gap:12px; }
+    .dev-menu-section { display:flex; flex-direction:column; gap:6px; }
+    .dev-menu-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-bottom:2px; }
+    .dev-theme-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; }
+    .dev-theme-btn {
+      padding:6px 4px; border-radius:8px; border:1px solid var(--border2);
+      background:var(--surface); color:var(--text); font-size:11px;
+      cursor:pointer; text-align:center; transition:background .15s, border-color .15s;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .dev-theme-btn:hover { border-color:var(--primary); background:var(--surface2); }
+    .dev-theme-btn.active { border-color:var(--primary); background:rgba(139,92,246,.18); font-weight:700; }
+    .dev-action-btn {
+      display:flex; align-items:center; gap:8px;
+      width:100%; padding:9px 12px; border-radius:10px;
+      border:1px solid var(--border2); background:var(--surface);
+      color:var(--text); font-size:13px; font-family:inherit; cursor:pointer;
+      transition:background .15s, border-color .15s; text-align:left;
+    }
+    .dev-action-btn:hover { background:var(--surface2); border-color:var(--primary); }
+    .dev-divider { height:1px; background:var(--border); margin:2px 0; }
 
     /* Nav submenus */
     .nav-group { display:flex; flex-direction:column; }
@@ -735,7 +761,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" title="Ocultar/Mostrar barra lateral" onclick="toggleSidebar()">☰</button>
           <h2 class="title">{t}</h2>
         </div>
-        <div class="theme-bar" style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">
           <div class="notif-wrap" id="notif-wrap">
             <button class="notif-bell-btn" id="notif-bell" title="Notificações" aria-label="Notificações">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -754,19 +780,38 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
               </div>
             </div>
           </div>
-          <div style="display:inline-flex;gap:4px;align-items:center">
-            <button id="ph-restore-btn" title="Mostrar todos os placeholders" onclick="localStorage.removeItem('ph-hidden');document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.style.display='inline-flex'}})" style="background:none;border:1px dashed rgba(245,158,11,.5);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#f59e0b;white-space:nowrap">📌 Placeholders</button>
-            <button title="Ocultar todos os placeholders" onclick="localStorage.setItem('ph-hidden','1');document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.style.display='none'}})" style="background:none;border:1px dashed rgba(239,68,68,.4);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#ef4444;white-space:nowrap">✕ Remover todos</button>
+          <div class="dev-menu-wrap" id="devMenuWrap">
+            <button class="dev-menu-btn" id="devMenuBtn" onclick="toggleDevMenu()" title="Menu Dev">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              Dev
+            </button>
+            <div class="dev-menu-dd" id="devMenuDd">
+              <div class="dev-menu-section">
+                <div class="dev-menu-label">&#127912; Temas</div>
+                <div class="dev-theme-grid" id="devThemeGrid">
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('roxo')">&#127769; Roxo</button>
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('oceano')">&#127754; Oceano</button>
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('floresta')">&#127807; Floresta</button>
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('aurora')">&#10024; Aurora</button>
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('claro')">&#9728;&#65039; Claro</button>
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('rosa')">&#127800; Rosa</button>
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('ceu')">&#127780; C&#233;u</button>
+                </div>
+              </div>
+              <div class="dev-divider"></div>
+              <div class="dev-menu-section">
+                <div class="dev-menu-label">&#128295; Utilidades</div>
+                <button class="dev-action-btn" onclick="devLimparCache()">
+                  <span style="font-size:16px">&#128260;</span>
+                  <div><div style="font-weight:600">Limpar Cache</div><div style="font-size:11px;color:var(--muted)">Recarrega a p&#225;gina ignorando cache</div></div>
+                </button>
+                <button class="dev-action-btn" id="devPhBtn" onclick="devTogglePh()">
+                  <span style="font-size:16px">&#128204;</span>
+                  <div><div style="font-weight:600">Placeholders</div><div style="font-size:11px;color:var(--muted)" id="devPhStatus">Carregando...</div></div>
+                </button>
+              </div>
+            </div>
           </div>
-          <select class="theme-select" id="theme-select">
-            <option value="roxo">🌙 Roxo</option>
-            <option value="oceano">🌊 Oceano</option>
-            <option value="floresta">🌿 Floresta</option>
-            <option value="aurora">✨ Aurora</option>
-            <option value="claro">☀️ Claro</option>
-            <option value="rosa">🌸 Rosa</option>
-            <option value="ceu">🌤 Céu</option>
-          </select>
         </div>
       </div>
       <div class="content">{body}</div>
@@ -818,18 +863,60 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     }})();
 
     (function(){{
+      /* ── Theme ── */
       var current = localStorage.getItem('posthub-theme') || 'roxo';
       function applyTheme(name) {{
         document.documentElement.setAttribute('data-theme', name);
         localStorage.setItem('posthub-theme', name);
-        var sel = document.getElementById('theme-select');
-        if (sel) sel.value = name;
+        document.querySelectorAll('.dev-theme-btn').forEach(function(b) {{
+          b.classList.toggle('active', b.getAttribute('onclick') && b.getAttribute('onclick').indexOf("'"+name+"'") !== -1);
+        }});
       }}
+      window.setThemeAndSave = function(name) {{ applyTheme(name); }};
       applyTheme(current);
-      var sel = document.getElementById('theme-select');
-      if (sel) sel.addEventListener('change', function() {{ applyTheme(this.value); }});
 
-      /* nav-sub toggle */
+      /* ── Dev Menu toggle ── */
+      window.toggleDevMenu = function() {{
+        var btn = document.getElementById('devMenuBtn');
+        var dd  = document.getElementById('devMenuDd');
+        var open = dd.classList.toggle('open');
+        btn.classList.toggle('open', open);
+        updatePhStatus();
+      }};
+      document.addEventListener('click', function(e) {{
+        var wrap = document.getElementById('devMenuWrap');
+        if (wrap && !wrap.contains(e.target)) {{
+          document.getElementById('devMenuDd').classList.remove('open');
+          document.getElementById('devMenuBtn').classList.remove('open');
+        }}
+      }});
+
+      /* ── Limpar Cache ── */
+      window.devLimparCache = function() {{
+        var base = location.pathname;
+        location.href = base + '?_cb=' + Date.now();
+      }};
+
+      /* ── Placeholders toggle ── */
+      function updatePhStatus() {{
+        var hidden = localStorage.getItem('ph-hidden') === '1';
+        var el = document.getElementById('devPhStatus');
+        if (el) el.textContent = hidden ? 'Ocultos — clique para mostrar' : 'Vis&#237;veis — clique para ocultar';
+      }}
+      window.devTogglePh = function() {{
+        var hidden = localStorage.getItem('ph-hidden') === '1';
+        if (hidden) {{
+          localStorage.removeItem('ph-hidden');
+          document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{ el.style.display='inline-flex'; }});
+        }} else {{
+          localStorage.setItem('ph-hidden','1');
+          document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{ el.style.display='none'; }});
+        }}
+        updatePhStatus();
+      }};
+      updatePhStatus();
+
+      /* ── nav-sub toggle ── */
       var navBtn = document.getElementById('nav-config-btn');
       if (navBtn) {{
         navBtn.addEventListener('click', function() {{
