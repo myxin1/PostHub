@@ -634,7 +634,10 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
               </div>
             </div>
           </div>
-          <button id="ph-restore-btn" title="Mostrar todos os placeholders" onclick="document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.style.display='inline-flex'}})" style="background:none;border:1px dashed rgba(245,158,11,.5);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#f59e0b;white-space:nowrap">📌 Placeholders</button>
+          <div style="display:inline-flex;gap:4px;align-items:center">
+            <button id="ph-restore-btn" title="Mostrar todos os placeholders" onclick="document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.style.display='inline-flex'}})" style="background:none;border:1px dashed rgba(245,158,11,.5);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#f59e0b;white-space:nowrap">📌 Placeholders</button>
+            <button title="Remover todos os placeholders" onclick="document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{el.remove()}});this.parentElement.style.display='none'" style="background:none;border:1px dashed rgba(239,68,68,.4);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;color:#ef4444;white-space:nowrap">✕ Remover todos</button>
+          </div>
           <select class="theme-select" id="theme-select">
             <option value="roxo">🌙 Roxo</option>
             <option value="oceano">🌊 Oceano</option>
@@ -752,9 +755,16 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           var errLine = '';
           if (n.type === 'error' && n.error_label) {{
             var fixPart = n.fix_url
-              ? ' <a href="' + _esc(n.fix_url) + '" style="color:#ef4444;font-weight:600;text-decoration:none">→ Corrigir</a>'
+              ? '<a href="' + _esc(n.fix_url) + '" style="display:inline-block;margin-top:5px;font-size:11px;font-weight:700;color:#fff;background:#ef4444;border-radius:6px;padding:3px 10px;text-decoration:none">→ Corrigir</a>'
               : '';
-            errLine = '<div style="font-size:11px;color:#ef4444;margin-top:3px;font-weight:600">' + _esc(n.error_label) + fixPart + '</div>';
+            var fixText = n.fix
+              ? '<div style="font-size:11px;color:var(--muted,#888);margin-top:3px;line-height:1.5">' + _esc(n.fix) + '</div>'
+              : '';
+            errLine = '<div style="margin-top:5px;padding:8px 10px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.18);border-radius:8px">'
+              + '<div style="font-size:11px;color:#ef4444;font-weight:700">⚠ ' + _esc(n.error_label) + '</div>'
+              + fixText
+              + fixPart
+              + '</div>';
           }}
           return '<div class="notif-item">' + icon +
             '<div class="notif-item-text">' +
