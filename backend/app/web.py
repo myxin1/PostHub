@@ -1065,6 +1065,56 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         document.querySelectorAll('.dev-ph-wrap').forEach(function(el) {{ el.style.display='none'; }});
       }}
     }})();
+
+    // ── Diagnostic modal ─────────────────────────────────────────────────────
+    function openDiagModal(botId) {{
+      var overlay = document.getElementById('diagOverlay');
+      if (!overlay) return;
+      var inp = document.getElementById('diagBotIdInput');
+      if (inp) inp.value = botId || '';
+      overlay.classList.add('open');
+      document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:28px;margin-bottom:8px">&#9203;</div>Verificando configura&#231;&#245;es...</div>';
+      document.getElementById('diagFooter').innerHTML = '';
+      var nameEl = document.getElementById('diagBotName');
+      if (nameEl) nameEl.textContent = '';
+      var url = '/app/robot/diagnose' + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
+      fetch(url, {{credentials: 'same-origin'}})
+        .then(function(r) {{
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        }})
+        .then(function(data) {{
+          if (data.bot_name && nameEl) nameEl.textContent = 'Rob\u00f4: ' + data.bot_name;
+          var icons = {{ok:'&#9989;', warn:'&#9888;&#65039;', err:'&#10060;'}};
+          var out = '';
+          (data.results || []).forEach(function(item) {{
+            out += '<div class="diag-item ' + item.status + '" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
+            out += '<div style="display:flex;align-items:flex-start;gap:10px">';
+            out += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">' + (icons[item.status] || '&bull;') + '</span>';
+            out += '<div style="flex:1">';
+            out += '<div style="font-weight:600;font-size:14px;margin-bottom:3px">' + item.label + '</div>';
+            if (item.desc) out += '<div style="font-size:12px;color:var(--muted);line-height:1.5">' + item.desc + '</div>';
+            if (item.fix) out += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.15);border-radius:7px;line-height:1.5">' + item.fix + '</div>';
+            out += '</div></div></div>';
+          }});
+          document.getElementById('diagItems').innerHTML = out || '<div style="padding:20px;text-align:center;color:var(--muted)">Nenhum resultado.</div>';
+          var footer = '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
+          if (data.can_start) {{
+            footer += '<button type="button" class="btn" onclick="closeDiagModal();document.getElementById(\'diagStartForm\').submit()" style="min-width:130px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob\u00f4</button>';
+          }} else {{
+            footer += '<button type="button" class="btn" disabled style="min-width:130px;opacity:.4;cursor:not-allowed">&#9658; Iniciar Rob\u00f4</button>';
+          }}
+          document.getElementById('diagFooter').innerHTML = footer;
+        }})
+        .catch(function(err) {{
+          document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">&#10060; Erro ao verificar: ' + err.message + '</div>';
+          document.getElementById('diagFooter').innerHTML = '<button type="button" class="btn secondary" onclick="closeDiagModal()">Fechar</button>';
+        }});
+    }}
+    function closeDiagModal() {{
+      var overlay = document.getElementById('diagOverlay');
+      if (overlay) overlay.classList.remove('open');
+    }}
   </script>
 </body>
 </html>"""
@@ -1951,7 +2001,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             _pr_name_esc = html.escape(_pr.name)
             _pr_id = _pr.id
             if _ip:
-                _card_btn = f"<form method='post' action='/app/robot/stop' style='margin:0'><button type='submit' class='btn' style='font-size:13px;padding:7px 14px;background:#10b981;border-color:#10b981;color:#fff;box-shadow:0 0 10px rgba(16,185,129,.3)'>● Parar</button></form>"
+                _card_btn = f"<div style='display:flex;flex-direction:column;align-items:center;gap:4px'><span style='font-size:11px;font-weight:700;color:#10b981;letter-spacing:.4px'>&#9889; RODANDO</span><form method='post' action='/app/robot/stop' style='margin:0'><button type='submit' style='background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;padding:0;text-decoration:underline'>parar</button></form></div>"
                 _icon_bg = "linear-gradient(135deg,#10b981,#059669)"
                 _sub = "<span style='font-size:11px;color:#10b981;font-weight:600'>&#9889; Processando...</span>"
             else:
@@ -2117,55 +2167,6 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     <form id="diagStartForm" method="post" action="/app/robot/start" style="display:none">
       <input type="hidden" id="diagBotIdInput" name="bot_id" value="">
     </form>
-    <script>
-    var _diagBotId = null;
-    function openDiagModal(botId) {
-      _diagBotId = botId || null;
-      document.getElementById('diagBotIdInput').value = botId || '';
-      document.getElementById('diagOverlay').classList.add('open');
-      document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:28px;margin-bottom:8px">&#9203;</div>Verificando configura&#231;&#245;es...</div>';
-      document.getElementById('diagFooter').innerHTML = '';
-      document.getElementById('diagBotName').textContent = '';
-      var url = '/app/robot/diagnose' + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
-      fetch(url, {credentials: 'same-origin'})
-        .then(function(r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.json();
-        })
-        .then(function(data) {
-          if (data.bot_name) {
-            document.getElementById('diagBotName').textContent = 'Robô: ' + data.bot_name;
-          }
-          var icons = {ok:'&#9989;', warn:'&#9888;&#65039;', err:'&#10060;'};
-          var out = '';
-          data.results.forEach(function(item) {
-            out += '<div class="diag-item ' + item.status + '" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
-            out += '<div style="display:flex;align-items:flex-start;gap:10px">';
-            out += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">' + (icons[item.status] || '&bull;') + '</span>';
-            out += '<div style="flex:1">';
-            out += '<div style="font-weight:600;font-size:14px;margin-bottom:3px">' + item.label + '</div>';
-            if (item.desc) out += '<div style="font-size:12px;color:var(--muted);line-height:1.5">' + item.desc + '</div>';
-            if (item.fix) out += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.15);border-radius:7px;line-height:1.5">' + item.fix + '</div>';
-            out += '</div></div></div>';
-          });
-          document.getElementById('diagItems').innerHTML = out;
-          var footer = '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
-          if (data.can_start) {
-            footer += '<button type="button" class="btn" onclick="document.getElementById(\'diagStartForm\').submit()" style="min-width:120px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob&#244;</button>';
-          } else {
-            footer += '<button type="button" class="btn" disabled style="min-width:120px;opacity:.4;cursor:not-allowed">&#9658; Iniciar Rob&#244;</button>';
-          }
-          document.getElementById('diagFooter').innerHTML = footer;
-        })
-        .catch(function(err) {
-          document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">Erro ao verificar: ' + err.message + '. Tente novamente.</div>';
-          document.getElementById('diagFooter').innerHTML = '<button type="button" class="btn secondary" onclick="closeDiagModal()">Fechar</button>';
-        });
-    }
-    function closeDiagModal() {
-      document.getElementById('diagOverlay').classList.remove('open');
-    }
-    </script>
     """
     body = body + diag_modal
     return _layout("Robô", body, user=user)
