@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_, select, update
 
@@ -1850,27 +1850,42 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
       </div>
     </div>"""
     else:
+        # Per-bot cards com botão Iniciar individual
+        _bot_cards_html = ""
+        for _pr in all_profiles:
+            if not _pr.active:
+                continue
+            _qj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status == JobStatus.queued)) or 0)
+            _rj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status == JobStatus.running)) or 0)
+            _pp = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _pr.id, Post.status == PostStatus.pending)) or 0)
+            _pc = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _pr.id, Post.status == PostStatus.processing)) or 0)
+            _ip = (_qj + _rj + _pp + _pc) > 0
+            _pr_emoji = (_pr.publish_config_json or {}).get("emoji") or "🤖"
+            _pr_name_esc = html.escape(_pr.name)
+            _pr_id = _pr.id
+            if _ip:
+                _card_btn = f"<form method='post' action='/app/robot/stop' style='margin:0'><button type='submit' class='btn' style='font-size:13px;padding:7px 14px;background:#10b981;border-color:#10b981;color:#fff;box-shadow:0 0 10px rgba(16,185,129,.3)'>● Parar</button></form>"
+                _icon_bg = "linear-gradient(135deg,#10b981,#059669)"
+                _sub = "<span style='font-size:11px;color:#10b981;font-weight:600'>&#9889; Processando...</span>"
+            else:
+                _card_btn = f"<button type='button' class='btn' onclick=\"openDiagModal('{_pr_id}')\" style='font-size:13px;padding:7px 14px'>&#9658; Iniciar</button>"
+                _icon_bg = "linear-gradient(135deg,var(--primary),var(--pink))"
+                _sub = "<span style='display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#10b981;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.25);border-radius:20px;padding:2px 9px'><span class='dot-pulse'></span>Online</span>"
+            _bot_cards_html += f"""<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:var(--surface2);border:1px solid {'rgba(16,185,129,.3)' if _ip else 'var(--border)'};border-radius:12px;flex:1;min-width:200px"><div style="display:flex;align-items:center;gap:10px"><div style="width:38px;height:38px;border-radius:10px;background:{_icon_bg};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">{_pr_emoji}</div><div><div style="font-size:14px;font-weight:700">{_pr_name_esc}</div><div style="margin-top:3px">{_sub}</div></div></div><div style="flex-shrink:0">{_card_btn}</div></div>"""
+
         _active_banner = f"""
-    <div class="active-project-banner" style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:12px">
-        <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--primary),var(--pink));display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">{html.escape((bot.publish_config_json or {{}}).get('emoji') or '🤖')}</div>
+    <div class="active-project-banner" style="margin-bottom:14px;flex-direction:column;align-items:stretch;gap:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <div>
-          <div class="active-project-label">Projeto ativo</div>
-          <div class="active-project-name">{html.escape(bot.name)}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
-            <span class="active-project-stat" style="border-color:{wp_status_color};color:{wp_status_color}">
-              <b>WP:</b> {wp_status_label}
-            </span>
-            <span class="active-project-stat" style="border-color:{'#10b981' if gemini_ok else '#ef4444'};color:{'#10b981' if gemini_ok else '#ef4444'}">
-              <b>Gemini:</b> {gemini_status}
-            </span>
-          </div>
+          <div class="active-project-label">Robôs ativos</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:2px">{active_count} de {MAX_ACTIVE} ligados — clique em Iniciar para processar agora</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn secondary" style="font-size:13px;padding:7px 14px" type="button" onclick="openWizard()">+ Novo Projeto</button>
         </div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button class="btn secondary" style="font-size:13px;padding:7px 14px" type="button"
-          onclick="openWizard()">+ Novo Projeto</button>
-        <a href="/app/profiles/{bot.id}?tab=integracoes" class="btn secondary" style="font-size:13px;padding:7px 14px">⚙ Configurar</a>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        {_bot_cards_html}
       </div>
     </div>"""
 
@@ -1929,23 +1944,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             <span class="active-project-stat">Fila: <b>{queued_due}</b> prontos / <b>{queued_scheduled}</b> agend. / <b>{running_jobs}</b> rod.</span>
             <span class="active-project-stat">Posts: <b>{pending_posts}</b> pend. / <b>{processing_posts}</b> proc.</span>
           </div>
-          {_ph("botao-iniciar-parar")}
           <div class="robot-actions">
-            <div class="robot-action-card robot-action-primary" style="{'border-color:#10b981;background:rgba(16,185,129,.08)' if in_progress else ''}">
-              <div class="robot-action-icon" style="{'background:linear-gradient(135deg,#10b981,#059669);color:#fff' if in_progress else ''}">{"●" if in_progress else "▶"}</div>
-              <div style="flex:1">
-                <div class="robot-action-title">{"Robô Ativo" if in_progress else "Iniciar Robô"}</div>
-                <div class="robot-action-desc muted">{"Processando automaticamente — clique para parar" if in_progress else "Busca fontes e processa automaticamente"}</div>
-                {f"""<div id="wp-error-msg" style="display:none;margin-top:8px;padding:8px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;font-size:12px;color:#ef4444">
-                  ⚠ WordPress não configurado. Vá em <a href="/app/profiles/{bot.id}?tab=integracoes" style="color:#ef4444;font-weight:600">Configurar → Integrações → WordPress</a> e adicione a URL, usuário e App Password.
-                </div>""" if not in_progress else ""}
-              </div>
-              {"<form method='post' action='/app/robot/stop' style='margin-left:auto'><button class='btn' type='submit' style='white-space:nowrap;min-width:110px;justify-content:center;background:#10b981;border-color:#10b981;color:#fff;box-shadow:0 0 12px rgba(16,185,129,.4)'>● ATIVO</button></form>"
-              if in_progress else
-              """<div style="margin-left:auto">
-                <button class='btn' type='button' id='btn-iniciar-diag' style='white-space:nowrap;min-width:110px;justify-content:center' onclick='openDiagModal()'>▶ Iniciar</button>
-              </div>"""}
-            </div>
             {f'''{_ph("botao-rodar-agora")}<div class="robot-action-card">
               <div class="robot-action-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">⚡</div>
               <div><div class="robot-action-title">Rodar pendentes agora</div><div class="robot-action-desc muted">{queued_scheduled} jobs agendados aguardando</div></div>
@@ -2009,62 +2008,76 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
       </details>
     </div>
     """
-    diag_modal = f"""
+    diag_modal = """
     <div class="diag-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagModal()">
       <div class="diag-modal" style="padding:22px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-          <div style="font-weight:700;font-size:17px">Diagnóstico antes de iniciar</div>
+          <div>
+            <div style="font-weight:700;font-size:17px">Diagn&#243;stico antes de iniciar</div>
+            <div id="diagBotName" style="font-size:12px;color:var(--muted);margin-top:2px"></div>
+          </div>
           <button onclick="closeDiagModal()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
         </div>
         <div id="diagItems" style="display:flex;flex-direction:column;gap:10px;min-height:80px">
           <div style="text-align:center;padding:32px;color:var(--muted)">
-            <div style="font-size:28px;margin-bottom:8px">⏳</div>
-            Verificando configurações...
+            <div style="font-size:28px;margin-bottom:8px">&#9203;</div>
+            Verificando configura&#231;&#245;es...
           </div>
         </div>
         <div id="diagFooter" style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end"></div>
       </div>
     </div>
-    <form id="diagStartForm" method="post" action="/app/robot/start" style="display:none"></form>
+    <form id="diagStartForm" method="post" action="/app/robot/start" style="display:none">
+      <input type="hidden" id="diagBotIdInput" name="bot_id" value="">
+    </form>
     <script>
-    function openDiagModal(){{
-      var overlay = document.getElementById('diagOverlay');
-      overlay.classList.add('open');
-      document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:28px;margin-bottom:8px">⏳</div>Verificando configurações...</div>';
+    var _diagBotId = null;
+    function openDiagModal(botId) {
+      _diagBotId = botId || null;
+      document.getElementById('diagBotIdInput').value = botId || '';
+      document.getElementById('diagOverlay').classList.add('open');
+      document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:28px;margin-bottom:8px">&#9203;</div>Verificando configura&#231;&#245;es...</div>';
       document.getElementById('diagFooter').innerHTML = '';
-      fetch('/app/robot/diagnose')
-        .then(function(r){{ return r.json(); }})
-        .then(function(data){{
-          var icons = {{ok:'✅', warn:'⚠️', err:'❌'}};
-          var html = '';
-          data.results.forEach(function(item){{
-            html += '<div class="diag-item ' + item.status + '" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
-            html += '<div style="display:flex;align-items:flex-start;gap:10px">';
-            html += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">' + (icons[item.status]||'•') + '</span>';
-            html += '<div style="flex:1">';
-            html += '<div style="font-weight:600;font-size:14px;margin-bottom:3px">' + item.label + '</div>';
-            if(item.desc) html += '<div style="font-size:12px;color:var(--muted);line-height:1.4">' + item.desc + '</div>';
-            if(item.fix) html += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.12);border-radius:7px;line-height:1.5">' + item.fix + '</div>';
-            html += '</div></div></div>';
-          }});
-          document.getElementById('diagItems').innerHTML = html;
-          var footer = '';
-          footer += '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
-          if(data.can_start){{
-            footer += '<button type="button" class="btn" onclick="document.getElementById(\'diagStartForm\').submit()" style="min-width:110px;background:#10b981;border-color:#10b981;color:#fff">▶ Iniciar</button>';
-          }} else {{
-            footer += '<button type="button" class="btn" disabled style="min-width:110px;opacity:.45;cursor:not-allowed">▶ Iniciar</button>';
-          }}
+      document.getElementById('diagBotName').textContent = '';
+      var url = '/app/robot/diagnose' + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
+      fetch(url, {credentials: 'same-origin'})
+        .then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function(data) {
+          if (data.bot_name) {
+            document.getElementById('diagBotName').textContent = 'Robô: ' + data.bot_name;
+          }
+          var icons = {ok:'&#9989;', warn:'&#9888;&#65039;', err:'&#10060;'};
+          var out = '';
+          data.results.forEach(function(item) {
+            out += '<div class="diag-item ' + item.status + '" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
+            out += '<div style="display:flex;align-items:flex-start;gap:10px">';
+            out += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">' + (icons[item.status] || '&bull;') + '</span>';
+            out += '<div style="flex:1">';
+            out += '<div style="font-weight:600;font-size:14px;margin-bottom:3px">' + item.label + '</div>';
+            if (item.desc) out += '<div style="font-size:12px;color:var(--muted);line-height:1.5">' + item.desc + '</div>';
+            if (item.fix) out += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.15);border-radius:7px;line-height:1.5">' + item.fix + '</div>';
+            out += '</div></div></div>';
+          });
+          document.getElementById('diagItems').innerHTML = out;
+          var footer = '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
+          if (data.can_start) {
+            footer += '<button type="button" class="btn" onclick="document.getElementById(\'diagStartForm\').submit()" style="min-width:120px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob&#244;</button>';
+          } else {
+            footer += '<button type="button" class="btn" disabled style="min-width:120px;opacity:.4;cursor:not-allowed">&#9658; Iniciar Rob&#244;</button>';
+          }
           document.getElementById('diagFooter').innerHTML = footer;
-        }})
-        .catch(function(){{
-          document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">Erro ao verificar. Tente novamente.</div>';
+        })
+        .catch(function(err) {
+          document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">Erro ao verificar: ' + err.message + '. Tente novamente.</div>';
           document.getElementById('diagFooter').innerHTML = '<button type="button" class="btn secondary" onclick="closeDiagModal()">Fechar</button>';
-        }});
-    }}
-    function closeDiagModal(){{
+        });
+    }
+    function closeDiagModal() {
       document.getElementById('diagOverlay').classList.remove('open');
-    }}
+    }
     </script>
     """
     body = body + diag_modal
@@ -2078,8 +2091,13 @@ def bot_redirect(user: User = Depends(get_current_user), db=Depends(get_db)):
 
 
 @router.post("/app/robot/start", include_in_schema=False)
-def robot_start(user: User = Depends(get_current_user), db=Depends(get_db)):
-    bot = _get_or_create_single_bot(db, user=user)
+def robot_start(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+    if bot_id:
+        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
+        if not bot:
+            return RedirectResponse("/app/robot?msg=Projeto+não+encontrado.", status_code=status.HTTP_302_FOUND)
+    else:
+        bot = _get_or_create_single_bot(db, user=user)
 
     # Verifica se WordPress está configurado com usuário e senha
     wp_integ = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.WORDPRESS))
@@ -2124,11 +2142,16 @@ def robot_start(user: User = Depends(get_current_user), db=Depends(get_db)):
 
 
 @router.get("/app/robot/diagnose", include_in_schema=False)
-def robot_diagnose(user: User = Depends(get_current_user), db=Depends(get_db)):
+def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
     """Diagnóstico rápido: verifica WP credentials + fontes antes de iniciar."""
     from fastapi.responses import JSONResponse
     import base64 as _b64
-    bot = _get_or_create_single_bot(db, user=user)
+    if bot_id:
+        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
+        if not bot:
+            return JSONResponse({"error": "bot not found", "results": [], "can_start": False}, status_code=404)
+    else:
+        bot = _get_or_create_single_bot(db, user=user)
     results = []
 
     # ── 1. WordPress ────────────────────────────────────────────
@@ -2213,7 +2236,7 @@ def robot_diagnose(user: User = Depends(get_current_user), db=Depends(get_db)):
         results.append({"key": "gemini", "status": "ok", "label": "Gemini configurado", "desc": "IA pronta para reescrever os posts."})
 
     can_start = all(r["status"] != "err" for r in results)
-    return JSONResponse({"results": results, "can_start": can_start})
+    return JSONResponse({"results": results, "can_start": can_start, "bot_name": bot.name})
 
 
 @router.post("/app/robot/stop", include_in_schema=False)
