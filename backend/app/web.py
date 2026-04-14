@@ -3991,30 +3991,154 @@ def integrations_wordpress(
 
 @router.get("/app/posts", include_in_schema=False)
 def posts_page(user: User = Depends(get_current_user), db=Depends(get_db)):
-    bot = _get_or_create_single_bot(db, user=user)
-    q = (
-        select(Post, CollectedContent.title)
-        .join(CollectedContent, CollectedContent.id == Post.collected_content_id)
-        .where(Post.profile_id == bot.id, Post.status == PostStatus.completed, Post.wp_url.is_not(None))
-        .order_by(Post.published_at.desc().nullslast(), Post.created_at.desc())
-        .limit(15)
-    )
-    posts = list(db.execute(q).all())
-    rows = "".join(
-        f"<tr><td>{html.escape(str(title or ''))}</td><td class='muted'>{html.escape(_fmt_dt(p.published_at or p.created_at, user=user))}</td><td><a href='{html.escape(p.wp_url or '')}' target='_blank' rel='noopener noreferrer'>{html.escape(p.wp_url or '')}</a></td></tr>"
-        for p, title in posts
-    )
-    body = f"""
-    <div class="card">
+    all_profiles = list(db.scalars(
+        select(AutomationProfile)
+        .where(AutomationProfile.user_id == user.id)
+        .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
+    ))
+
+    # ── Status pill helper ──────────────────────────────────────────────────
+    _status_cfg = {
+        "completed":  ("#10b981", "rgba(16,185,129,.12)",  "✓ Publicado"),
+        "pending":    ("#f59e0b", "rgba(245,158,11,.12)",  "⏳ Pendente"),
+        "processing": ("#6366f1", "rgba(99,102,241,.12)",  "⚡ Processando"),
+        "failed":     ("#ef4444", "rgba(239,68,68,.12)",   "✕ Falhou"),
+        "cancelled":  ("#6b7280", "rgba(107,114,128,.12)", "— Cancelado"),
+    }
+    def _status_pill(s):
+        color, bg, label = _status_cfg.get(s, ("#6b7280", "rgba(107,114,128,.12)", s))
+        return f"<span style='display:inline-flex;align-items:center;font-size:11px;font-weight:600;color:{color};background:{bg};border-radius:20px;padding:3px 10px;white-space:nowrap'>{label}</span>"
+
+    # ── Global totals ────────────────────────────────────────────────────────
+    total_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_([p.id for p in all_profiles]), Post.status == PostStatus.completed)) or 0)
+    total_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_([p.id for p in all_profiles]), Post.status == PostStatus.pending)) or 0)
+    total_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_([p.id for p in all_profiles]), Post.status == PostStatus.failed)) or 0)
+
+    # ── Summary bar ─────────────────────────────────────────────────────────
+    summary_bar = f"""
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px">
+      <div style="flex:1;min-width:140px;padding:16px 20px;background:var(--surface);border:1px solid rgba(16,185,129,.25);border-radius:14px;display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(16,185,129,.15);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">✓</div>
+        <div><div style="font-size:26px;font-weight:800;color:#10b981;line-height:1">{total_pub}</div><div style="font-size:11px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.6px">Publicados</div></div>
+      </div>
+      <div style="flex:1;min-width:140px;padding:16px 20px;background:var(--surface);border:1px solid rgba(245,158,11,.25);border-radius:14px;display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(245,158,11,.15);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">⏳</div>
+        <div><div style="font-size:26px;font-weight:800;color:#f59e0b;line-height:1">{total_pend}</div><div style="font-size:11px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.6px">Pendentes</div></div>
+      </div>
+      <div style="flex:1;min-width:140px;padding:16px 20px;background:var(--surface);border:1px solid rgba(239,68,68,.25);border-radius:14px;display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(239,68,68,.15);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">✕</div>
+        <div><div style="font-size:26px;font-weight:800;color:#ef4444;line-height:1">{total_fail}</div><div style="font-size:11px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.6px">Falhas</div></div>
+      </div>
+      <div style="flex:1;min-width:140px;padding:16px 20px;background:var(--surface);border:1px solid var(--border);border-radius:14px;display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:10px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🤖</div>
+        <div><div style="font-size:26px;font-weight:800;color:var(--text);line-height:1">{len(all_profiles)}</div><div style="font-size:11px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.6px">Projetos</div></div>
+      </div>
+    </div>"""
+
+    # ── Per-bot sections ─────────────────────────────────────────────────────
+    bot_sections = ""
+    for pr in all_profiles:
+        pr_emoji = (pr.publish_config_json or {}).get("emoji") or "🤖"
+        pr_name  = html.escape(pr.name)
+
+        # WP URL
+        wp_url = ""
+        wp_integ = db.scalar(select(Integration).where(Integration.profile_id == pr.id, Integration.type == IntegrationType.WORDPRESS))
+        if wp_integ:
+            try:
+                creds = decrypt_json(wp_integ.credentials_encrypted)
+                wp_url = (creds.get("base_url") or "") if isinstance(creds, dict) else ""
+            except Exception:
+                pass
+        wp_domain = wp_url.replace("https://","").replace("http://","").rstrip("/") if wp_url else ""
+
+        # counts
+        c_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.completed)) or 0)
+        c_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.pending)) or 0)
+        c_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.failed)) or 0)
+        c_proc = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.processing)) or 0)
+
+        # recent posts (all statuses)
+        posts = list(db.execute(
+            select(Post, CollectedContent.title)
+            .join(CollectedContent, CollectedContent.id == Post.collected_content_id)
+            .where(Post.profile_id == pr.id)
+            .order_by(Post.published_at.desc().nullslast(), Post.created_at.desc())
+            .limit(25)
+        ).all())
+
+        if not posts:
+            table_html = f"<div style='padding:24px;text-align:center;color:var(--muted);font-size:13px'>Nenhum post ainda — <a href='/app/robot' style='color:var(--primary)'>iniciar o robô</a> para começar.</div>"
+        else:
+            rows_html = ""
+            for p, title in posts:
+                t = html.escape(str(title or "")[:80] + ("…" if len(str(title or "")) > 80 else ""))
+                dt = html.escape(_fmt_dt(p.published_at or p.created_at, user=user))
+                link = ""
+                if p.wp_url:
+                    domain = html.escape(p.wp_url.split("/")[-1][:40] if "/" in p.wp_url else p.wp_url[:40])
+                    link = f"<a href='{html.escape(p.wp_url)}' target='_blank' rel='noopener' style='color:var(--primary);font-size:12px;display:inline-flex;align-items:center;gap:4px'>&#8599; Ver</a>"
+                rows_html += f"<tr><td style='max-width:320px'><div style='font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px'>{t}</div></td><td>{_status_pill(p.status.value)}</td><td style='font-size:12px;color:var(--muted);white-space:nowrap'>{dt}</td><td style='white-space:nowrap'>{link}</td></tr>"
+            table_html = f"""<div style='overflow-x:auto'>
+              <table style='width:100%;border-collapse:collapse'>
+                <thead><tr>
+                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Título</th>
+                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Status</th>
+                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Data</th>
+                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Link</th>
+                </tr></thead>
+                <tbody>{rows_html}</tbody>
+              </table></div>"""
+
+        # status indicator
+        if pr.active:
+            status_badge = "<span style='display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);border-radius:20px;padding:2px 10px'><span class='dot-pulse'></span>Online</span>"
+        else:
+            status_badge = "<span style='font-size:11px;font-weight:600;color:var(--muted);background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:2px 10px'>Inativo</span>"
+
+        icon_bg = "linear-gradient(135deg,#10b981,#059669)" if pr.active else "linear-gradient(135deg,var(--primary),var(--pink))"
+
+        bot_sections += f"""
+    <div class="card" style="margin-bottom:14px">
       <details class="toggle-section" open>
-        <summary><span class="ts-title">Posts Publicados <span class="ts-badge">{len(posts)}</span></span><span class="ts-arrow">▶</span></summary>
-        <div class="ts-body">
-          <p class="muted">Mostrando as <b>15</b> últimas receitas publicadas.</p>
-          <table><thead><tr><th>Título</th><th>Quando</th><th>Link</th></tr></thead><tbody>{rows}</tbody></table>
+        <summary>
+          <span class="ts-title" style="display:flex;align-items:center;gap:10px">
+            <div style="width:34px;height:34px;border-radius:9px;background:{icon_bg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{pr_emoji}</div>
+            <div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="font-weight:700">{pr_name}</span>
+                {status_badge}
+              </div>
+              {f'<div style="font-size:11px;color:var(--muted);margin-top:2px">{html.escape(wp_domain)}</div>' if wp_domain else ''}
+            </div>
+          </span>
+          <span style="display:flex;align-items:center;gap:16px;margin-right:8px;flex-wrap:wrap">
+            <span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#10b981">{c_pub}</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Public.</span></span>
+            <span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#f59e0b">{c_pend}</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pend.</span></span>
+            {'<span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#6366f1">' + str(c_proc) + '</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Proc.</span></span>' if c_proc > 0 else ''}
+            <span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#ef4444">{c_fail}</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Falhas</span></span>
+            <span class="ts-arrow">▶</span>
+          </span>
+        </summary>
+        <div class="ts-body" style="padding-top:4px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+            <span style="font-size:12px;color:var(--muted)">Últimos {len(posts)} posts de todos os status</span>
+            <a href="/app/profiles/{pr.id}?tab=posts" class="btn secondary" style="font-size:12px;padding:5px 12px">Ver todos ↗</a>
+          </div>
+          {table_html}
         </div>
       </details>
-    </div>
-    """
+    </div>"""
+
+    if not all_profiles:
+        bot_sections = """<div class="card" style="text-align:center;padding:48px 20px">
+          <div style="font-size:48px;margin-bottom:12px">📭</div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:8px">Nenhum projeto criado</div>
+          <div style="color:var(--muted);margin-bottom:20px">Crie seu primeiro projeto para começar a publicar.</div>
+          <a href="/app/robot" class="btn">🤖 Ir para Robô</a>
+        </div>"""
+
+    body = summary_bar + bot_sections
     return _layout("Posts", body, user=user)
 
 
