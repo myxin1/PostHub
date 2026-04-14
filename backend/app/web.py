@@ -1067,13 +1067,24 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     }})();
 
     // ── Diagnostic modal ─────────────────────────────────────────────────────
+    function closeDiagModal() {{
+      var overlay = document.getElementById('diagOverlay');
+      if (overlay) overlay.classList.remove('open');
+    }}
+    function confirmDiagStart() {{
+      closeDiagModal();
+      document.getElementById('diagStartForm').submit();
+    }}
     function openDiagModal(botId) {{
       var overlay = document.getElementById('diagOverlay');
       if (!overlay) return;
       var inp = document.getElementById('diagBotIdInput');
       if (inp) inp.value = botId || '';
       overlay.classList.add('open');
-      document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:28px;margin-bottom:8px">&#9203;</div>Verificando configura&#231;&#245;es...</div>';
+      var loadingHtml = '<div style="text-align:center;padding:32px;color:var(--muted)">'
+        + '<div style="font-size:28px;margin-bottom:8px">&#9203;</div>'
+        + 'Verificando configura&#231;&#245;es...</div>';
+      document.getElementById('diagItems').innerHTML = loadingHtml;
       document.getElementById('diagFooter').innerHTML = '';
       var nameEl = document.getElementById('diagBotName');
       if (nameEl) nameEl.textContent = '';
@@ -1100,20 +1111,16 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           document.getElementById('diagItems').innerHTML = out || '<div style="padding:20px;text-align:center;color:var(--muted)">Nenhum resultado.</div>';
           var footer = '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
           if (data.can_start) {{
-            footer += '<button type="button" class="btn" onclick="closeDiagModal();document.getElementById(\'diagStartForm\').submit()" style="min-width:130px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob\u00f4</button>';
+            footer += '<button type="button" class="btn" onclick="confirmDiagStart()" style="min-width:130px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob\u00f4</button>';
           }} else {{
             footer += '<button type="button" class="btn" disabled style="min-width:130px;opacity:.4;cursor:not-allowed">&#9658; Iniciar Rob\u00f4</button>';
           }}
           document.getElementById('diagFooter').innerHTML = footer;
         }})
         .catch(function(err) {{
-          document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">&#10060; Erro ao verificar: ' + err.message + '</div>';
+          document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">&#10060; Erro: ' + err.message + '</div>';
           document.getElementById('diagFooter').innerHTML = '<button type="button" class="btn secondary" onclick="closeDiagModal()">Fechar</button>';
         }});
-    }}
-    function closeDiagModal() {{
-      var overlay = document.getElementById('diagOverlay');
-      if (overlay) overlay.classList.remove('open');
     }}
   </script>
 </body>
