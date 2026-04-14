@@ -901,7 +901,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       function updatePhStatus() {{
         var hidden = localStorage.getItem('ph-hidden') === '1';
         var el = document.getElementById('devPhStatus');
-        if (el) el.textContent = hidden ? 'Ocultos — clique para mostrar' : 'Vis&#237;veis — clique para ocultar';
+        if (el) el.textContent = hidden ? 'Ocultos \u2014 clique para mostrar' : 'Vis\u00edveis \u2014 clique para ocultar';
       }}
       window.devTogglePh = function() {{
         var hidden = localStorage.getItem('ph-hidden') === '1';
