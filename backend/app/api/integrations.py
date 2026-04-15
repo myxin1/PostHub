@@ -70,8 +70,15 @@ def test_integration(integration_id: str, user: User = Depends(get_current_user)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     if integ.type == IntegrationType.WORDPRESS:
         base_url = str(creds.get("base_url") or "")
-        username = str(creds.get("username") or "")
-        app_password = str(creds.get("app_password") or "")
+        if "users" in creds:
+            users = creds["users"] or []
+            active_username = str(creds.get("active_username") or "")
+            active_user = next((u for u in users if u.get("username") == active_username), users[0] if users else {})
+            username = str(active_user.get("username") or "")
+            app_password = str(active_user.get("app_password") or "")
+        else:
+            username = str(creds.get("username") or "")
+            app_password = str(creds.get("app_password") or "")
         if not base_url or not username or not app_password:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_credentials")
         url = urljoin(base_url.rstrip("/") + "/", "wp-json/wp/v2/users/me?context=edit")

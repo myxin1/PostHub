@@ -51,6 +51,18 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             import traceback
             _startup_error.append(traceback.format_exc())
+        if os.getenv("POSTHUB_INLINE_WORKER", "0") == "1":
+            worker_id = f"inline:{socket.gethostname()}:{os.getpid()}"
+
+            async def loop():
+                while True:
+                    try:
+                        did_work = await asyncio.to_thread(run_worker_tick, worker_id=worker_id)
+                    except Exception:
+                        did_work = False
+                    await asyncio.sleep(0.2 if did_work else 1.0)
+
+            asyncio.create_task(loop())
 
     @app.get("/api/setup", include_in_schema=False)
     def _setup():
@@ -75,18 +87,6 @@ def create_app() -> FastAPI:
         if _startup_error:
             log.append(f"Startup error: {_startup_error[0]}")
         return PlainTextResponse("\n".join(log))
-        if os.getenv("POSTHUB_INLINE_WORKER", "0") == "1":
-            worker_id = f"inline:{socket.gethostname()}:{os.getpid()}"
-
-            async def loop():
-                while True:
-                    try:
-                        did_work = await asyncio.to_thread(run_worker_tick, worker_id=worker_id)
-                    except Exception:
-                        did_work = False
-                    await asyncio.sleep(0.2 if did_work else 1.0)
-
-            asyncio.create_task(loop())
 
     app.include_router(auth_router)
     app.include_router(profiles_router)
