@@ -953,8 +953,15 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
 
       /* ── Limpar Cache ── */
       window.devLimparCache = function() {{
-        var base = location.pathname;
-        location.href = base + '?_cb=' + Date.now();
+        // Limpa estados de toggle (ph-tgl:*) e outros caches ph-* do localStorage
+        var toRemove = [];
+        for (var i = 0; i < localStorage.length; i++) {{
+          var k = localStorage.key(i);
+          if (k && k.startsWith('ph-')) toRemove.push(k);
+        }}
+        toRemove.forEach(function(k) {{ localStorage.removeItem(k); }});
+        // Força fetch sem cache do servidor
+        location.href = location.pathname + '?_cb=' + Date.now();
       }};
 
       /* ── Placeholders toggle ── */
@@ -1353,7 +1360,10 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
 </html>"""
     # Strip surrogate characters that can come from DB emoji/JSON fields
     safe_page = page.encode("utf-8", errors="replace").decode("utf-8")
-    return HTMLResponse(safe_page)
+    return HTMLResponse(safe_page, headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    })
 
 
 @router.get("/", include_in_schema=False)
