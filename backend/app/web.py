@@ -5441,7 +5441,8 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
           </div>
         </div>
       </details>
-    </div>"""
+    </div>
+</details>"""
 
     if not all_profiles:
         bot_sections = """<div class="card" style="text-align:center;padding:48px 20px">
