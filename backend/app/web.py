@@ -1217,8 +1217,9 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         var h = Math.floor(seconds / 3600);
         var m = Math.floor((seconds % 3600) / 60);
         var s = seconds % 60;
-        function pad(n) {{ return String(n).padStart(2, '0'); }}
-        return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s);
+        if (h > 0) return h + 'h ' + m + 'm ' + s + 's';
+        if (m > 0) return m + 'm ' + s + 's';
+        return s + 's';
       }}
       function _tickCountdowns() {{
         var now = Date.now();
@@ -1227,6 +1228,17 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           if (!target) return;
           var remaining = Math.ceil((target - now) / 1000);
           el.textContent = remaining > 0 ? _fmtCountdown(remaining) : 'agora';
+        }});
+        document.querySelectorAll('[data-ph-elapsed-since]').forEach(function(el) {{
+          var since = Number(el.getAttribute('data-ph-elapsed-since') || '0');
+          if (!since) return;
+          var secs = Math.floor((now - since) / 1000);
+          var h2 = Math.floor(secs / 3600);
+          var m2 = Math.floor((secs % 3600) / 60);
+          var s2 = secs % 60;
+          if (h2 > 0) el.textContent = h2 + 'h ' + m2 + 'm';
+          else if (m2 > 0) el.textContent = m2 + 'm ' + s2 + 's';
+          else el.textContent = secs + 's';
         }});
       }}
       _tickCountdowns();
@@ -5041,8 +5053,8 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
     flash_msg = (request.query_params.get("msg") or "").strip()
     flash_html = f"<div class='card' style='border-color:rgba(99,102,241,.4);margin-bottom:14px'><b>{html.escape(flash_msg)}</b></div>" if flash_msg else ""
     now_utc = datetime.utcnow()
-    help_menu = """
-    <details class="card toggle-section" style="margin-bottom:14px;padding:0;overflow:hidden">
+    help_menu = f"""
+    <details class="card toggle-section" data-persist-toggle="help-menu-posts" style="margin-bottom:14px;padding:0;overflow:hidden">
       <summary style="padding:14px 18px">
         <span class="ts-title" style="display:flex;align-items:center;gap:8px">
           <span style="width:24px;height:24px;border-radius:6px;background:rgba(99,102,241,.12);display:inline-flex;align-items:center;justify-content:center">&#8505;</span>
@@ -5050,13 +5062,14 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         </span>
         <span class="ts-arrow">&#9658;</span>
       </summary>
-      <div class="ts-body" style="padding:0 18px 16px">
+      <div class="ts-body" style="padding:14px 18px 16px">
+        {_ph("help-menu-posts")}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;font-size:12px;color:var(--muted);line-height:1.55">
           <div><b style="color:var(--text)">Abrir bot</b><br>O cabeçalho de cada bot é um toggle. Clique nele para mostrar ou ocultar as ações e listas.</div>
           <div><b style="color:var(--text)">Rodar agora</b><br>Libera jobs pendentes/agendados. Fica desativado quando não existe fila para rodar.</div>
           <div><b style="color:var(--text)">Reprocessar IA</b><br>Reagenda posts com falha para a IA tentar novamente. Só ativa quando há falhas.</div>
           <div><b style="color:var(--text)">Cancelar pendentes</b><br>Cancela posts pendentes ou em processamento do bot. Só ativa quando há pendências.</div>
-          <div><b style="color:var(--text)">Apagar publicados</b><br>Remove publicados do PostHub. Use “Apagar do WordPress” para remover também do site.</div>
+          <div><b style="color:var(--text)">Apagar publicados</b><br>Remove publicados do PostHub. Use "Apagar do WordPress" para remover também do site.</div>
           <div><b style="color:var(--text)">Corrigir</b><br>Reprocessa o texto de um post publicado e atualiza o artigo existente no WordPress.</div>
           <div><b style="color:var(--text)">Logs</b><br>Fica oculto por padrão. Abra apenas quando quiser acompanhar etapas e erros.</div>
         </div>
@@ -5138,6 +5151,11 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                 JOB_MEDIA: "mídia",
                 JOB_PUBLISH_WP: "publicação",
             }
+            elapsed_ms = int(p_obj.created_at.replace(tzinfo=timezone.utc).timestamp() * 1000)
+            elapsed_row = (
+                "<div style='font-size:10px;color:var(--muted);margin-top:3px;white-space:nowrap'>"
+                f"há <span data-ph-elapsed-since='{elapsed_ms}'>...</span></div>"
+            )
             running_job = db.scalar(
                 select(Job)
                 .where(Job.post_id == p_obj.id, Job.status == JobStatus.running)
@@ -5146,11 +5164,12 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             )
             if running_job:
                 stage = html.escape(stage_labels.get(running_job.type, running_job.type))
-                return (
+                main = (
                     "<span style='display:inline-flex;align-items:center;gap:6px;color:#6366f1;font-size:11px;font-weight:700;"
                     "background:rgba(99,102,241,.12);padding:3px 8px;border-radius:20px;white-space:nowrap'>"
                     f"<span class='dot-pulse'></span>{stage} agora</span>"
                 )
+                return f"<div>{main}{elapsed_row}</div>"
             queued_job = db.scalar(
                 select(Job)
                 .where(Job.post_id == p_obj.id, Job.status == JobStatus.queued)
@@ -5161,21 +5180,25 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                 stage = html.escape(stage_labels.get(queued_job.type, queued_job.type))
                 run_at = queued_job.run_at or now_utc
                 if run_at <= now_utc:
-                    return (
+                    main = (
                         "<span style='display:inline-flex;align-items:center;gap:6px;color:#10b981;font-size:11px;font-weight:700;"
                         "background:rgba(16,185,129,.10);padding:3px 8px;border-radius:20px;white-space:nowrap'>"
                         f"{stage}: agora</span>"
                     )
+                    return f"<div>{main}{elapsed_row}</div>"
                 target_ms = int(run_at.replace(tzinfo=timezone.utc).timestamp() * 1000)
-                return (
+                main = (
                     "<span style='display:inline-flex;flex-direction:column;gap:1px;color:var(--text);font-size:11px;white-space:nowrap'>"
                     f"<span style='color:#f59e0b;font-weight:700'>Próxima: {stage}</span>"
-                    f"<span>em <b data-ph-countdown-target='{target_ms}'>--:--</b></span>"
+                    f"<span>em <b data-ph-countdown-target='{target_ms}'>...</b></span>"
                     "</span>"
                 )
+                return f"<div>{main}{elapsed_row}</div>"
             if p_obj.status == PostStatus.processing:
-                return "<span style='font-size:11px;color:var(--muted);white-space:nowrap'>Finalizando...</span>"
-            return "<span style='font-size:11px;color:var(--muted);white-space:nowrap'>Aguardando fila</span>"
+                main = "<span style='font-size:11px;color:var(--muted);white-space:nowrap'>Finalizando...</span>"
+                return f"<div>{main}{elapsed_row}</div>"
+            main = "<span style='font-size:11px;color:var(--muted);white-space:nowrap'>Aguardando fila</span>"
+            return f"<div>{main}{elapsed_row}</div>"
 
         def _build_pub_rows(items):
             out = ""
@@ -5278,7 +5301,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         fail_action_style = "" if fail_posts else "opacity:.45;cursor:not-allowed;"
 
         bot_sections += _ph(f"bot-section-{pr_id}") + f"""
-    <details class="card toggle-section" open style="margin-bottom:20px;padding:0;overflow:hidden">
+    <details class="card toggle-section" data-persist-toggle="bot-{pr_id}" open style="margin-bottom:20px;padding:0;overflow:hidden">
       <summary style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:40px;height:40px;border-radius:10px;background:{icon_bg};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">{pr_emoji}</div>
@@ -5317,7 +5340,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             </form>
         </div>
       <!-- Publicados -->
-      <details class="toggle-section" {'open' if pub_posts else ''}>
+      <details class="toggle-section" data-persist-toggle="bot-pub-{pr_id}" {'open' if pub_posts else ''}>
         <summary style="padding:12px 20px;border-bottom:1px solid var(--border)">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(16,185,129,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">✓</span>
@@ -5338,7 +5361,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         </div>
       </details>
       <!-- Pendentes -->
-      <details class="toggle-section" {'open' if pend_posts else ''} style="border-top:1px solid var(--border)">
+      <details class="toggle-section" data-persist-toggle="bot-pend-{pr_id}" {'open' if pend_posts else ''} style="border-top:1px solid var(--border)">
         <summary style="padding:12px 20px;border-bottom:1px solid var(--border)">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(245,158,11,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">⏳</span>
@@ -5361,7 +5384,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         </div>
       </details>
       <!-- Falhas -->
-      <details class="toggle-section" {'open' if fail_posts else ''} style="border-top:1px solid var(--border)">
+      <details class="toggle-section" data-persist-toggle="bot-fail-{pr_id}" {'open' if fail_posts else ''} style="border-top:1px solid var(--border)">
         <summary style="padding:12px 20px">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(239,68,68,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">✕</span>
@@ -5383,7 +5406,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         </div>
       </details>
       <!-- Live Log -->
-      <details class="toggle-section" style="border-top:1px solid var(--border)">
+      <details class="toggle-section" data-persist-toggle="bot-log-{pr_id}" style="border-top:1px solid var(--border)">
         <summary style="padding:12px 20px">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(99,102,241,.12);display:inline-flex;align-items:center;justify-content:center;font-size:11px">&#9889;</span>
@@ -5434,9 +5457,18 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                 Post.status.in_([PostStatus.pending, PostStatus.processing])
             )
         ) or 0)
-    refresh_js = ""
+    # Script de persistência de toggles (sempre presente nesta página)
+    refresh_js = """<script>
+(function(){
+  var P='ph-tgl:';
+  function _save(el){if(el.hasAttribute('data-persist-toggle'))localStorage.setItem(P+el.getAttribute('data-persist-toggle'),el.open?'1':'0');}
+  function _restore(){document.querySelectorAll('details[data-persist-toggle]').forEach(function(el){var v=localStorage.getItem(P+el.getAttribute('data-persist-toggle'));if(v==='1')el.open=true;else if(v==='0')el.open=false;});}
+  _restore();
+  document.addEventListener('toggle',function(e){if(e.target.tagName==='DETAILS')_save(e.target);},true);
+})();
+</script>"""
     if _active_job_count > 0 or _active_post_count > 0:
-        refresh_js = "<script>setTimeout(function(){location.reload();},5000);</script>"
+        refresh_js += "<script>setTimeout(function(){location.reload();},5000);</script>"
 
     body = flash_html + _ph("secao-posts") + summary_bar + help_menu + bot_sections + refresh_js
     return _layout("Posts", body, user=user)
