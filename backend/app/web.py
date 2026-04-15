@@ -5301,7 +5301,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         fail_action_style = "" if fail_posts else "opacity:.45;cursor:not-allowed;"
 
         bot_sections += _ph(f"bot-section-{pr_id}") + f"""
-    <details class="card toggle-section" data-persist-toggle="bot-{pr_id}" open style="margin-bottom:20px;padding:0;overflow:hidden">
+    <details class="card toggle-section" data-persist-toggle="bot-{pr_id}" data-default-open="1" style="margin-bottom:20px;padding:0;overflow:hidden">
       <summary style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:40px;height:40px;border-radius:10px;background:{icon_bg};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">{pr_emoji}</div>
@@ -5340,7 +5340,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             </form>
         </div>
       <!-- Publicados -->
-      <details class="toggle-section" data-persist-toggle="bot-pub-{pr_id}" {'open' if pub_posts else ''}>
+      <details class="toggle-section" data-persist-toggle="bot-pub-{pr_id}" data-default-open="{'1' if pub_posts else '0'}"  >
         <summary style="padding:12px 20px;border-bottom:1px solid var(--border)">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(16,185,129,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">✓</span>
@@ -5361,7 +5361,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         </div>
       </details>
       <!-- Pendentes -->
-      <details class="toggle-section" data-persist-toggle="bot-pend-{pr_id}" {'open' if pend_posts else ''} style="border-top:1px solid var(--border)">
+      <details class="toggle-section" data-persist-toggle="bot-pend-{pr_id}" data-default-open="{'1' if pend_posts else '0'}" style="border-top:1px solid var(--border)">
         <summary style="padding:12px 20px;border-bottom:1px solid var(--border)">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(245,158,11,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">⏳</span>
@@ -5384,7 +5384,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         </div>
       </details>
       <!-- Falhas -->
-      <details class="toggle-section" data-persist-toggle="bot-fail-{pr_id}" {'open' if fail_posts else ''} style="border-top:1px solid var(--border)">
+      <details class="toggle-section" data-persist-toggle="bot-fail-{pr_id}" data-default-open="{'1' if fail_posts else '0'}" style="border-top:1px solid var(--border)">
         <summary style="padding:12px 20px">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(239,68,68,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">✕</span>
@@ -5406,7 +5406,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         </div>
       </details>
       <!-- Live Log -->
-      <details class="toggle-section" data-persist-toggle="bot-log-{pr_id}" style="border-top:1px solid var(--border)">
+      <details class="toggle-section" data-persist-toggle="bot-log-{pr_id}" data-default-open="0" style="border-top:1px solid var(--border)">
         <summary style="padding:12px 20px">
           <span class="ts-title" style="display:flex;align-items:center;gap:8px">
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(99,102,241,.12);display:inline-flex;align-items:center;justify-content:center;font-size:11px">&#9889;</span>
@@ -5458,11 +5458,21 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             )
         ) or 0)
     # Script de persistência de toggles (sempre presente nesta página)
+    # Técnica: servidor NÃO renderiza open/closed — JS lê localStorage ou data-default-open
+    # Isso garante que nunca há flash de "abre e fecha" no auto-reload de 5s
     refresh_js = """<script>
 (function(){
   var P='ph-tgl:';
-  function _save(el){if(el.hasAttribute('data-persist-toggle'))localStorage.setItem(P+el.getAttribute('data-persist-toggle'),el.open?'1':'0');}
-  function _restore(){document.querySelectorAll('details[data-persist-toggle]').forEach(function(el){var v=localStorage.getItem(P+el.getAttribute('data-persist-toggle'));if(v==='1')el.open=true;else if(v==='0')el.open=false;});}
+  function _save(el){
+    if(el.hasAttribute('data-persist-toggle'))
+      localStorage.setItem(P+el.getAttribute('data-persist-toggle'),el.open?'1':'0');
+  }
+  function _restore(){
+    document.querySelectorAll('details[data-persist-toggle]').forEach(function(el){
+      var saved=localStorage.getItem(P+el.getAttribute('data-persist-toggle'));
+      el.open = saved!==null ? saved==='1' : el.getAttribute('data-default-open')==='1';
+    });
+  }
   _restore();
   document.addEventListener('toggle',function(e){if(e.target.tagName==='DETAILS')_save(e.target);},true);
 })();
