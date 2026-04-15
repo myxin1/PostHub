@@ -91,6 +91,22 @@ def test_integration(integration_id: str, user: User = Depends(get_current_user)
         db.add(integ)
         db.commit()
         return {"ok": ok, "status_code": resp.status_code}
+    if integ.type == IntegrationType.OPENAI:
+        api_key = str(creds.get("api_key") or "").strip()
+        if not api_key:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_credentials")
+        try:
+            from app.services.openai_service import OpenAIError, generate_text as openai_generate
+            openai_generate(prompt="Respond with OK", content="OK", api_key=api_key, model=str(creds.get("model") or "").strip() or "gpt-4o-mini")
+            integ.status = IntegrationStatus.CONNECTED
+        except OpenAIError as e:
+            integ.status = IntegrationStatus.ERROR
+            db.add(integ)
+            db.commit()
+            return {"ok": False, "error": str(e)}
+        db.add(integ)
+        db.commit()
+        return {"ok": True}
     integ.status = IntegrationStatus.CONNECTED
     db.add(integ)
     db.commit()

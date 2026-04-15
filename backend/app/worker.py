@@ -33,7 +33,8 @@ from app.models import (
 from app.queue import JOB_AI, JOB_CLEAN, JOB_COLLECT, JOB_FACEBOOK_PUBLISH, JOB_MEDIA, JOB_PUBLISH_WP, enqueue_job, get_due_job, log_event, schedule_retry
 from app.services.clean import clean_text
 from app.services.facebook import FacebookError, comment_on_post, publish_page_post
-from app.services.gemini import GeminiError, generate_text
+from app.services.gemini import GeminiError, generate_text as gemini_generate_text
+from app.services.openai_service import OpenAIError, generate_text as openai_generate_text
 from app.services.images import download_and_prepare_image
 from app.services.rss import fetch_rss_items, keyword_to_google_news_rss
 from app.services.scrape import discover_recipe_links, is_probably_homepage, looks_like_recipe_page, scrape_url
@@ -284,6 +285,8 @@ def _handle_ai(db, job: Job):
         if job.profile_id:
             profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == job.profile_id))
         gemini_key = None
+        openai_key = None
+        openai_model = None
         if job.profile_id:
             gi = db.scalar(select(Integration).where(Integration.profile_id == job.profile_id, Integration.type == IntegrationType.GEMINI))
             if gi:
@@ -292,6 +295,14 @@ def _handle_ai(db, job: Job):
                     gemini_key = str(gcreds.get("api_key") or "").strip() or None
                 except Exception:
                     gemini_key = None
+            oi = db.scalar(select(Integration).where(Integration.profile_id == job.profile_id, Integration.type == IntegrationType.OPENAI))
+            if oi:
+                try:
+                    ocreds = decrypt_json(oi.credentials_encrypted)
+                    openai_key = str(ocreds.get("api_key") or "").strip() or None
+                    openai_model = str(ocreds.get("model") or "").strip() or None
+                except Exception:
+                    openai_key = None
         publish_cfg = dict((profile.publish_config_json if profile else {}) or {})
         allowed_categories = list(publish_cfg.get("categories") or [])
         if not allowed_categories:
@@ -375,8 +386,14 @@ def _handle_ai(db, job: Job):
             "- Tags: 3 a 8, específicas (evite genéricos como 'receita')\n"
         )
         seed_title = _sanitize_source_title(content.title or "")
-        res = generate_text(prompt=prompt, content=f"TÍTULO: {seed_title}\n\n{base_text}", api_key=gemini_key)
-        parsed = _parse_ai_json(res.text)
+
+        def _run_ai(p: str, c: str) -> str:
+            if openai_key:
+                return openai_generate_text(prompt=p, content=c, model=openai_model, api_key=openai_key).text
+            return gemini_generate_text(prompt=p, content=c, api_key=gemini_key).text
+
+        res_text = _run_ai(prompt, f"TÍTULO: {seed_title}\n\n{base_text}")
+        parsed = _parse_ai_json(res_text)
         site_text = str(parsed.get("site") or "").strip()
         fb_text = str(parsed.get("facebook") or "").strip()
         site_ok = len(site_text) >= 200 and ("ingred" in site_text.lower()) and ("preparo" in site_text.lower())
@@ -398,8 +415,8 @@ def _handle_ai(db, job: Job):
                 "- Não invente ingredientes\n"
                 "- No site: incluir Título, Introdução, Ingredientes, Modo de preparo, Dicas\n"
             )
-            res2 = generate_text(prompt=fallback_prompt, content=f"TÍTULO: {seed_title}\n\n{base_text}", api_key=gemini_key)
-            parsed2 = _parse_ai_json(res2.text)
+            res2_text = _run_ai(fallback_prompt, f"TÍTULO: {seed_title}\n\n{base_text}")
+            parsed2 = _parse_ai_json(res2_text)
             site_text = str(parsed2.get("site") or "").strip()
             fb_text = str(parsed2.get("facebook") or "").strip()
             if len(site_text) < 200:

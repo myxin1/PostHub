@@ -13,6 +13,7 @@ pillow
 jinja2
 python-multipart
 google-generativeai
+openai
 authlib
 itsdangerous
 bcrypt

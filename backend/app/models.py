@@ -29,6 +29,7 @@ class IntegrationType(str, enum.Enum):
     FACEBOOK = "FACEBOOK"
     INSTAGRAM = "INSTAGRAM"
     GEMINI = "GEMINI"
+    OPENAI = "OPENAI"
 
 
 class IntegrationStatus(str, enum.Enum):

@@ -3644,16 +3644,28 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             except Exception:
                 pass
 
+        oai_integ = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.OPENAI))
+        oai_current_model = "gpt-4o-mini"
+        oai_configured = False
+        if oai_integ:
+            try:
+                oai_creds = decrypt_json(oai_integ.credentials_encrypted)
+                oai_current_model = str(oai_creds.get("model") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+                oai_configured = bool(oai_creds.get("api_key"))
+            except Exception:
+                pass
+
         # Aba ativa dentro de integrações (via query param itab)
         itab = (request.query_params.get("itab") or "wordpress").strip().lower()
 
         _itab_icons = {
             "wordpress": "<svg width='16' height='16' viewBox='0 0 24 24' fill='currentColor'><path d='M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zM3.251 12c0-1.308.265-2.556.741-3.695L7.36 18.658A8.762 8.762 0 0 1 3.251 12zm8.749 8.75a8.773 8.773 0 0 1-2.496-.364l2.65-7.695 2.716 7.44a.96.96 0 0 0 .07.136 8.764 8.764 0 0 1-2.94.483zm1.211-12.981c.528-.028.999-.084.999-.084.47-.056.415-.748-.056-.72 0 0-1.415.111-2.329.111-.858 0-2.3-.111-2.3-.111-.47-.028-.526.692-.055.72 0 0 .444.056.914.084l1.358 3.72-1.908 5.721-3.176-8.441c.528-.028 1-.084 1-.084.47-.056.415-.748-.056-.72 0 0-1.415.111-2.329.111a12.65 12.65 0 0 1-.31-.005A8.752 8.752 0 0 1 12 3.25c2.294 0 4.389.879 5.963 2.315a2.885 2.885 0 0 0-.19-.013c-.858 0-1.468.748-1.468 1.551 0 .72.415 1.329.859 2.049.332.581.719 1.329.719 2.409 0 .748-.287 1.617-.663 2.825l-.871 2.907-3.138-9.534zm3.64 11.791-.012-.025 2.733-7.897c.51-1.274.68-2.293.68-3.199 0-.329-.021-.634-.059-.921A8.751 8.751 0 0 1 20.75 12c0 3.216-1.731 6.031-4.319 7.56l.42-1z'/></svg>",
             "gemini": "<svg width='16' height='16' viewBox='0 0 24 24' fill='currentColor'><path d='M12 2l2.4 7.4H22l-6.3 4.6 2.4 7.4L12 17l-6.1 4.4 2.4-7.4L2 9.4h7.6z' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linejoin='round'/><path d='M12 2C10.5 7 8 9.5 2 12c6 2.5 8.5 5 10 10 1.5-5 4-7.5 10-10-6-2.5-8.5-5-10-10z'/></svg>",
+            "openai": "<svg width='16' height='16' viewBox='0 0 24 24' fill='currentColor'><path d='M22.28 9.95a5.4 5.4 0 0 0-.46-4.43 5.47 5.47 0 0 0-5.88-2.62 5.4 5.4 0 0 0-4.07-1.82 5.47 5.47 0 0 0-5.21 3.79 5.4 5.4 0 0 0-3.61 2.62 5.47 5.47 0 0 0 .67 6.41 5.4 5.4 0 0 0 .46 4.43 5.47 5.47 0 0 0 5.88 2.62 5.4 5.4 0 0 0 4.07 1.82 5.47 5.47 0 0 0 5.22-3.8 5.4 5.4 0 0 0 3.6-2.62 5.47 5.47 0 0 0-.67-6.42zm-8.15 11.42a4.05 4.05 0 0 1-2.6-.94l.13-.07 4.31-2.49a.71.71 0 0 0 .36-.62v-6.08l1.82 1.05a.07.07 0 0 1 .04.05v5.03a4.07 4.07 0 0 1-4.06 4.07zm-8.73-3.74a4.05 4.05 0 0 1-.48-2.72l.13.08 4.31 2.49a.71.71 0 0 0 .71 0l5.27-3.04v2.1a.07.07 0 0 1-.03.06l-4.36 2.52a4.07 4.07 0 0 1-5.55-1.49zm-1.14-9.43a4.05 4.05 0 0 1 2.12-1.79v5.1a.71.71 0 0 0 .36.62l5.26 3.04-1.82 1.05a.07.07 0 0 1-.07 0L5.7 13.7a4.07 4.07 0 0 1-.44-5.5zm14.97 3.49-5.27-3.04 1.82-1.05a.07.07 0 0 1 .07 0l4.37 2.52a4.07 4.07 0 0 1-.63 6.55v-5.1a.71.71 0 0 0-.36-.88zm1.81-2.73-.13-.08-4.3-2.5a.71.71 0 0 0-.72 0L10.63 9.4V7.3a.07.07 0 0 1 .03-.06l4.36-2.52a4.07 4.07 0 0 1 6.04 4.24zm-11.4 3.75-1.82-1.05a.07.07 0 0 1-.04-.05V6.58a4.07 4.07 0 0 1 6.68-3.13l-.13.07-4.3 2.49a.71.71 0 0 0-.36.62l-.03 6.09zm.99-2.13 2.35-1.35 2.34 1.35v2.7l-2.34 1.35-2.35-1.35v-2.7z'/></svg>",
             "facebook": "<svg width='16' height='16' viewBox='0 0 24 24' fill='currentColor'><path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z'/></svg>",
             "conexoes": "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/><path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/></svg>",
         }
-        itabs = [("wordpress", "WordPress"), ("gemini", "Gemini"), ("facebook", "Facebook"), ("conexoes", "Conexões")]
+        itabs = [("wordpress", "WordPress"), ("gemini", "Gemini"), ("openai", "ChatGPT"), ("facebook", "Facebook"), ("conexoes", "Conexões")]
 
         def itab_btn(key, label):
             is_active = itab == key
@@ -3806,6 +3818,107 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 <div style="margin-top:20px;display:flex;gap:10px">
                   <button class="btn" type="submit">Salvar</button>
                   {"<button type='button' class='btn secondary' onclick=\"document.getElementById('gem-edit-form').style.display='none'\">Cancelar</button>" if gem_configured else ""}
+                </div>
+              </form>
+            </div>"""
+        elif itab == "openai":
+            _oai_models = [
+                ("gpt-4o-mini",   "gpt-4o-mini — Rápido e econômico ⚡"),
+                ("gpt-4o",        "gpt-4o — Mais inteligente, multimodal 🧠"),
+                ("gpt-4-turbo",   "gpt-4-turbo — GPT-4 otimizado 🚀"),
+                ("gpt-3.5-turbo", "gpt-3.5-turbo — Leve e rápido 🪶"),
+            ]
+            _oai_model_opts = "".join(
+                f"<option value='{v}' {'selected' if v == oai_current_model else ''}>{html.escape(l)}</option>"
+                for v, l in _oai_models
+            )
+            if oai_configured and oai_integ:
+                try:
+                    _oai_raw_key = decrypt_json(oai_integ.credentials_encrypted).get("api_key", "")
+                    _oai_masked = (_oai_raw_key[:8] + "•" * min(16, max(4, len(_oai_raw_key) - 8))) if len(_oai_raw_key) > 8 else "••••••••"
+                except Exception:
+                    _oai_masked = "••••••••"
+                _oai_integ_id = str(oai_integ.id)
+                _oai_status = str(oai_integ.status.value) if oai_integ.status else "UNKNOWN"
+                _oai_status_color = "#10b981" if _oai_status == "CONNECTED" else "#f59e0b"
+                _oai_list = f"""
+                <div style="border:1px solid var(--border2);border-radius:14px;overflow:hidden;margin-bottom:24px">
+                  <div style="background:var(--surface2);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <span style="font-size:20px">🤖</span>
+                      <div>
+                        <div style="font-size:13px;font-weight:700;color:var(--text)">ChatGPT (OpenAI)</div>
+                        <div style="font-size:11px;color:var(--muted)">Integração configurada</div>
+                      </div>
+                    </div>
+                    <span style="color:{_oai_status_color};font-size:12px;font-weight:700;background:{'rgba(16,185,129,.1)' if _oai_status=='CONNECTED' else 'rgba(245,158,11,.1)'};border:1px solid {'rgba(16,185,129,.3)' if _oai_status=='CONNECTED' else 'rgba(245,158,11,.3)'};padding:3px 10px;border-radius:20px">{html.escape(_oai_status)}</span>
+                  </div>
+                  <div style="padding:18px 20px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                    <div>
+                      <div style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:5px">Chave API</div>
+                      <div style="font-family:monospace;font-size:13px;color:var(--text);background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:7px 12px;letter-spacing:.5px">{html.escape(_oai_masked)}</div>
+                    </div>
+                    <div>
+                      <div style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:5px">Modelo</div>
+                      <div style="font-size:13px;font-weight:600;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:7px 12px">{html.escape(oai_current_model)}</div>
+                    </div>
+                    <div>
+                      <div style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:5px">Bot</div>
+                      <div style="font-size:13px;font-weight:600;padding:7px 0">{html.escape(p.name)}</div>
+                    </div>
+                    <div style="display:flex;align-items:flex-end;gap:8px;padding-bottom:2px">
+                      <button type="button"
+                        onclick="var f=document.getElementById('oai-edit-form');f.style.display=f.style.display==='none'?'block':'none'"
+                        class="btn secondary" style="flex:1;justify-content:center">✏️ Editar</button>
+                      <form method="post" action="/app/profiles/{p.id}/integrations/{_oai_integ_id}/delete" style="margin:0;flex:1">
+                        <button class="btn secondary" type="submit" style="width:100%;justify-content:center;color:#ef4444"
+                          onclick="return confirm('Remover integração ChatGPT?')">
+                          <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' style='margin-right:4px'>
+                            <polyline points='3 6 5 6 21 6'/><path d='M19 6l-1 14H6L5 6'/><path d='M10 11v6'/><path d='M14 11v6'/><path d='M9 6V4h6v2'/>
+                          </svg> Excluir
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                </div>"""
+                _oai_form_display = "display:none"
+                _oai_form_label = "✏️ Editar chave / modelo"
+            else:
+                _oai_list = ""
+                _oai_form_display = "display:block"
+                _oai_form_label = "Configurar ChatGPT"
+
+            itab_content = f"""
+            {_oai_list}
+            <div id="oai-edit-form" style="{_oai_form_display};background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:24px">
+              <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">{_oai_form_label}</div>
+              <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;color:var(--muted);line-height:1.9">
+                <div style="font-weight:700;color:var(--text);margin-bottom:4px">Como obter a API Key</div>
+                <div>1. Acesse &nbsp;<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener"
+                  style="color:var(--primary);font-weight:600;text-decoration:underline">platform.openai.com/api-keys</a></div>
+                <div>2. Faça login com sua conta OpenAI</div>
+                <div>3. Clique em <b>Create new secret key</b></div>
+                <div>4. Copie a chave e cole no campo abaixo</div>
+                <div style="margin-top:8px;color:#f59e0b;font-size:12px">⚠️ A API OpenAI requer créditos pagos. Com ChatGPT Plus você tem acesso à API separado — verifique em platform.openai.com/usage.</div>
+              </div>
+              <form method="post" action="/app/profiles/{p.id}/integrations/openai">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+                  <div style="grid-column:1/-1">
+                    <label>OpenAI API Key</label>
+                    <input name="api_key" type="password" placeholder="sk-..." required
+                      style="font-family:monospace;letter-spacing:.5px" />
+                  </div>
+                  <div style="grid-column:1/-1">
+                    <label>Modelo</label>
+                    <select name="model" style="width:100%;padding:10px 13px;border-radius:9px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:13px;cursor:pointer">
+                      {_oai_model_opts}
+                    </select>
+                    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Recomendado: <b>gpt-4o-mini</b> — mais barato, suficiente para reescrever posts.</div>
+                  </div>
+                </div>
+                <div style="margin-top:20px;display:flex;gap:10px">
+                  <button class="btn" type="submit">Salvar</button>
+                  {"<button type='button' class='btn secondary' onclick=\"document.getElementById('oai-edit-form').style.display='none'\">Cancelar</button>" if oai_configured else ""}
                 </div>
               </form>
             </div>"""
@@ -4664,7 +4777,41 @@ def profile_gemini_integration_create(
         )
         db.add(integ)
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=integracoes&itab=gemini", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/app/profiles/{profile_id}/integrations/openai", include_in_schema=False)
+def profile_openai_integration_create(
+    profile_id: str,
+    api_key: str = Form(...),
+    model: str = Form(""),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    key = (api_key or "").strip()
+    if not key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_api_key")
+    creds = {"api_key": key, "model": (model or "").strip()}
+    encrypted = encrypt_json(creds)
+    existing = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.OPENAI))
+    if existing:
+        existing.credentials_encrypted = encrypted
+        existing.name = "ChatGPT"
+        db.add(existing)
+    else:
+        integ = Integration(
+            user_id=p.user_id,
+            profile_id=p.id,
+            type=IntegrationType.OPENAI,
+            name="ChatGPT",
+            credentials_encrypted=encrypted,
+        )
+        db.add(integ)
+    db.commit()
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=integracoes&itab=openai", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/integrations/{integration_id}/delete", include_in_schema=False)
