@@ -3,6 +3,15 @@ from __future__ import annotations
 import html
 
 
+def _safe(s: object) -> str:
+    """Return s as a string with surrogate/invalid Unicode characters replaced."""
+    try:
+        t = str(s)
+        return t.encode("utf-8", errors="replace").decode("utf-8")
+    except Exception:
+        return ""
+
+
 def _ph(name: str) -> str:
     """Placeholder de desenvolvimento — mostra label amarelo com ícones copiar/fechar."""
     return (
@@ -37,6 +46,7 @@ from app.models import (
     CollectedContent,
     EmailOutbox,
     Integration,
+    IntegrationStatus,
     IntegrationType,
     PasswordTokenType,
     Job,
@@ -49,7 +59,7 @@ from app.models import (
     User,
     UserRole,
 )
-from app.queue import JOB_AI, JOB_COLLECT, enqueue_job
+from app.queue import JOB_AI, JOB_CLEAN, JOB_COLLECT, JOB_MEDIA, JOB_PUBLISH_WP, enqueue_job
 from app.security import create_access_token, hash_password, verify_password
 from app.services.wordpress import WordPressError, delete_post
 
@@ -164,16 +174,6 @@ def _base_css() -> str:
       --grad1:rgba(16,185,129,.28); --grad2:rgba(52,211,153,.18); --grad3:rgba(5,150,105,.16);
       --input-bg:rgba(4,12,7,.75); --sidebar-bg:linear-gradient(180deg,rgba(4,12,7,.92),rgba(5,10,6,.75));
     }
-    [data-theme="aurora"] {
-      --bg:#060a0c; --bg2:#07090e;
-      --surface:rgba(8,18,24,.82); --surface2:rgba(5,12,16,.80);
-      --border:rgba(20,184,166,.15); --border2:rgba(20,184,166,.28);
-      --text:#f0fdfa; --muted:rgba(204,251,241,.60);
-      --primary:#14b8a6; --primary2:#0d9488; --pink:#f59e0b;
-      --shadow:0 16px 50px rgba(0,0,0,.55); --radius:18px;
-      --grad1:rgba(20,184,166,.28); --grad2:rgba(245,158,11,.18); --grad3:rgba(13,148,136,.16);
-      --input-bg:rgba(4,10,12,.75); --sidebar-bg:linear-gradient(180deg,rgba(4,10,14,.92),rgba(5,9,11,.75));
-    }
     [data-theme="claro"] {
       --bg:#f8fafc; --bg2:#f1f5f9;
       --surface:rgba(255,255,255,.95); --surface2:rgba(248,250,252,.92);
@@ -204,13 +204,24 @@ def _base_css() -> str:
       --grad1:rgba(96,165,250,.14); --grad2:rgba(59,130,246,.10); --grad3:rgba(37,99,235,.08);
       --input-bg:rgba(255,255,255,.97); --sidebar-bg:linear-gradient(180deg,rgba(224,239,255,.98),rgba(240,247,255,.96));
     }
+    [data-theme="corporativo"] {
+      --bg:#f5f5f5; --bg2:#ebebeb;
+      --surface:rgba(255,255,255,.98); --surface2:rgba(245,245,245,.95);
+      --border:rgba(0,0,0,.10); --border2:rgba(0,0,0,.18);
+      --text:#1a1a1a; --muted:rgba(26,26,26,.52);
+      --primary:#0077cc; --primary2:#005fa3; --pink:#e67e00;
+      --shadow:0 4px 20px rgba(0,0,0,.08); --radius:18px;
+      --grad1:rgba(0,119,204,.08); --grad2:rgba(230,126,0,.06); --grad3:rgba(0,95,163,.05);
+      --input-bg:#ffffff; --sidebar-bg:linear-gradient(180deg,rgba(235,235,235,.98),rgba(245,245,245,.96));
+    }
     [data-theme="claro"] input,[data-theme="claro"] select,[data-theme="claro"] textarea,
     [data-theme="rosa"] input,[data-theme="rosa"] select,[data-theme="rosa"] textarea,
-    [data-theme="ceu"] input,[data-theme="ceu"] select,[data-theme="ceu"] textarea {
+    [data-theme="ceu"] input,[data-theme="ceu"] select,[data-theme="ceu"] textarea,
+    [data-theme="corporativo"] input,[data-theme="corporativo"] select,[data-theme="corporativo"] textarea {
       color: var(--text) !important; border-color: var(--border2) !important;
     }
-    [data-theme="claro"] .brand,[data-theme="rosa"] .brand,[data-theme="ceu"] .brand { background: var(--surface2); }
-    [data-theme="claro"] .sidebar-footer,[data-theme="rosa"] .sidebar-footer,[data-theme="ceu"] .sidebar-footer { background: var(--surface2); }
+    [data-theme="claro"] .brand,[data-theme="rosa"] .brand,[data-theme="ceu"] .brand,[data-theme="corporativo"] .brand { background: var(--surface2); }
+    [data-theme="claro"] .sidebar-footer,[data-theme="rosa"] .sidebar-footer,[data-theme="ceu"] .sidebar-footer,[data-theme="corporativo"] .sidebar-footer { background: var(--surface2); }
 
     /* Dev Menu */
     .dev-menu-wrap { position:relative; }
@@ -272,9 +283,9 @@ def _base_css() -> str:
     .nav-sub a.active { color:var(--text); background:rgba(139,92,246,.18); border-color:rgba(139,92,246,.30); font-weight:600; }
     [data-theme="oceano"] .nav-sub a.active { background:rgba(14,165,233,.18); border-color:rgba(14,165,233,.30); }
     [data-theme="floresta"] .nav-sub a.active { background:rgba(16,185,129,.18); border-color:rgba(16,185,129,.30); }
-    [data-theme="aurora"] .nav-sub a.active { background:rgba(20,184,166,.18); border-color:rgba(20,184,166,.30); }
     [data-theme="rosa"] .nav-sub a.active { background:rgba(225,29,72,.14); border-color:rgba(225,29,72,.28); }
     [data-theme="ceu"] .nav-sub a.active { background:rgba(37,99,235,.14); border-color:rgba(37,99,235,.28); }
+    [data-theme="corporativo"] .nav-sub a.active { background:rgba(0,119,204,.12); border-color:rgba(0,119,204,.25); }
     .nav-step-num { display:inline-flex; align-items:center; justify-content:center;
       width:16px; height:16px; border-radius:999px; background:var(--border2);
       font-size:9px; font-weight:700; flex-shrink:0; opacity:.7; }
@@ -401,16 +412,21 @@ def _base_css() -> str:
     label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }
     input, select, textarea {
       width: 100%;
-      padding: 12px 12px;
+      padding: 12px 14px;
       border-radius: 14px;
-      border: 1px solid var(--border);
+      border: 1.5px solid var(--border2);
       background: var(--input-bg);
       color: var(--text);
       outline: none;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,.12);
+      transition: border-color .15s, box-shadow .15s;
     }
     input:focus, select:focus, textarea:focus {
-      border-color: rgba(139, 92, 246, 0.55);
-      box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.14);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(139,92,246,.18), inset 0 1px 3px rgba(0,0,0,.08);
+    }
+    input:not(:placeholder-shown), select, textarea:not(:placeholder-shown) {
+      border-color: var(--border2);
     }
     textarea { min-height: 140px; resize: vertical; }
     .btn {
@@ -454,6 +470,18 @@ def _base_css() -> str:
       background: rgba(18, 16, 28, 0.65);
       border-color: var(--primary);
       box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    }
+    .btn.flat {
+      background: var(--surface);
+      color: var(--text);
+      border: 1.5px solid var(--border2);
+      box-shadow: 0 1px 3px rgba(0,0,0,.07);
+    }
+    .btn.flat:hover {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+      box-shadow: 0 2px 8px rgba(0,0,0,.14);
     }
     .sidebar-toggle-btn {
       background: none; border: 1px solid var(--border); border-radius: 10px;
@@ -557,6 +585,39 @@ def _base_css() -> str:
     .badge-inactive .dot-off { width:8px; height:8px; border-radius:999px; background:var(--muted); opacity:.4; flex-shrink:0; }
     tr.proj-row-active td { background:rgba(16,185,129,.06); border-bottom-color:rgba(16,185,129,.12); }
     tr.proj-row-active td:first-child { border-left:3px solid #10b981; padding-left:10px; }
+    /* ── rodando animated dots ── */
+    .rodando-label { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; color:#10b981; }
+    .rodando-label .rdots::after { content:''; animation:rdots 1.4s steps(4,end) infinite; }
+    @keyframes rdots { 0%{content:''} 25%{content:'.'} 50%{content:'..'} 75%{content:'...'} 100%{content:''} }
+    /* ── running bot button ── */
+    .btn-running {
+      background:linear-gradient(135deg,#10b981,#059669);
+      color:#fff; border:none; border-radius:9px;
+      font-size:13px; font-weight:700; padding:8px 18px; cursor:pointer;
+      letter-spacing:.3px;
+      box-shadow:0 0 0 0 rgba(16,185,129,.5);
+      animation:running-pulse 1.6s infinite;
+    }
+    .btn-running:hover {
+      background:linear-gradient(135deg,#ef4444,#dc2626);
+      box-shadow:0 2px 12px rgba(239,68,68,.4);
+      animation:none;
+    }
+    @keyframes running-pulse {
+      0%   { box-shadow:0 0 0 0 rgba(16,185,129,.55); }
+      70%  { box-shadow:0 0 0 9px rgba(16,185,129,0); }
+      100% { box-shadow:0 0 0 0 rgba(16,185,129,0); }
+    }
+    /* ── publishing alert banner ── */
+    .publishing-alert { display:flex; align-items:center; gap:10px; padding:10px 16px; background:rgba(16,185,129,.1); border:1px solid rgba(16,185,129,.3); border-radius:10px; margin-bottom:10px; font-size:13px; font-weight:600; color:#10b981; }
+    .publishing-alert .pal-dot { width:9px; height:9px; border-radius:50%; background:#10b981; flex-shrink:0; animation:pulse-green 1.4s infinite; }
+    /* ── toast notification ── */
+    #posthub-toast { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+    .ph-toast { background:var(--surface); border:1.5px solid var(--border2); border-radius:12px; padding:12px 18px; font-size:13px; box-shadow:0 4px 20px rgba(0,0,0,.18); pointer-events:all; display:flex; align-items:center; gap:10px; max-width:320px; opacity:0; transform:translateY(12px); transition:opacity .3s,transform .3s; }
+    .ph-toast.show { opacity:1; transform:translateY(0); }
+    .ph-toast.success { border-color:rgba(16,185,129,.4); }
+    .ph-toast.error { border-color:rgba(239,68,68,.4); }
+    .ph-toast .ph-toast-icon { font-size:18px; flex-shrink:0; }
     /* ── diagnostic modal ── */
     .diag-overlay {
       display:none; position:fixed; inset:0; z-index:10000;
@@ -621,7 +682,7 @@ def _base_css() -> str:
     .robot-action-primary .robot-action-icon { background:linear-gradient(135deg,var(--primary),var(--pink)); color:#fff; }
     .robot-action-title { font-weight:600; font-size:14px; margin-bottom:2px; }
     .robot-action-desc { font-size:12px; }
-    [data-theme="claro"] tr.proj-row-active td,[data-theme="rosa"] tr.proj-row-active td,[data-theme="ceu"] tr.proj-row-active td { background:rgba(16,185,129,.05); }
+    [data-theme="claro"] tr.proj-row-active td,[data-theme="rosa"] tr.proj-row-active td,[data-theme="ceu"] tr.proj-row-active td,[data-theme="corporativo"] tr.proj-row-active td { background:rgba(16,185,129,.05); }
     /* ── notification bell ── */
     .notif-wrap { position:relative; }
     .notif-bell-btn {
@@ -690,7 +751,6 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         ("ia",           "IA",           "3"),
         ("publicacao",   "Publicação",   "4"),
         ("agendamento",  "Agendamento",  "5"),
-        ("posts",        "Posts",        ""),
     ]
     if profile_id:
         sub_links = "".join(
@@ -792,10 +852,10 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
                   <button class="dev-theme-btn" onclick="setThemeAndSave('roxo')">&#127769; Roxo</button>
                   <button class="dev-theme-btn" onclick="setThemeAndSave('oceano')">&#127754; Oceano</button>
                   <button class="dev-theme-btn" onclick="setThemeAndSave('floresta')">&#127807; Floresta</button>
-                  <button class="dev-theme-btn" onclick="setThemeAndSave('aurora')">&#10024; Aurora</button>
                   <button class="dev-theme-btn" onclick="setThemeAndSave('claro')">&#9728;&#65039; Claro</button>
                   <button class="dev-theme-btn" onclick="setThemeAndSave('rosa')">&#127800; Rosa</button>
                   <button class="dev-theme-btn" onclick="setThemeAndSave('ceu')">&#127780; C&#233;u</button>
+                  <button class="dev-theme-btn" onclick="setThemeAndSave('corporativo')">&#128188; Corp.</button>
                 </div>
               </div>
               <div class="dev-divider"></div>
@@ -915,6 +975,10 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         updatePhStatus();
       }};
       updatePhStatus();
+      // Apply saved placeholder visibility on every page load
+      if (localStorage.getItem('ph-hidden') === '1') {{
+        document.querySelectorAll('.dev-ph-wrap').forEach(function(el){{ el.style.display='none'; }});
+      }}
 
       /* ── nav-sub toggle ── */
       var navBtn = document.getElementById('nav-config-btn');
@@ -1038,8 +1102,135 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         }}
       }});
 
+      window._phFetchFeed = _fetchFeed;
       _fetchFeed();
       setInterval(_fetchFeed, 20000);
+    }})();
+
+    window._phUpdateCount = function(tid) {{
+      var t = document.getElementById(tid);
+      if (!t) return;
+      var n = t.querySelectorAll('tbody input[name=post_id]:checked').length;
+      var el = document.getElementById('cnt-' + tid);
+      if (el) el.textContent = n > 0 ? n + ' selecionado(s)' : '';
+    }};
+
+    // ── Bot status polling + toast notifications ────────────────────────────
+    (function() {{
+      var _prevStatus = {{}};
+      var _toastWrap = document.createElement('div');
+      _toastWrap.id = 'posthub-toast';
+      document.body.appendChild(_toastWrap);
+
+      function _showToast(msg, type) {{
+        var t = document.createElement('div');
+        t.className = 'ph-toast ' + (type || 'success');
+        t.innerHTML = '<span class="ph-toast-icon">' + (type === 'error' ? '&#10060;' : '&#9989;') + '</span><span>' + msg + '</span>';
+        _toastWrap.appendChild(t);
+        setTimeout(function(){{ t.classList.add('show'); }}, 20);
+        setTimeout(function(){{
+          t.classList.remove('show');
+          setTimeout(function(){{ if (t.parentNode) t.parentNode.removeChild(t); }}, 350);
+        }}, 5000);
+      }}
+
+      function _pollBotStatus() {{
+        fetch('/app/robot/status')
+          .then(function(r){{ return r.ok ? r.json() : []; }})
+          .then(function(bots) {{
+            (bots || []).forEach(function(b) {{
+              var prev = _prevStatus[b.id];
+              if (prev === true && !b.is_running) {{
+                // bot just stopped — show toast and refresh notification bell
+                _showToast('&#9989; ' + b.name + ' parou. Veja as notificações.', 'success');
+                if (typeof window._phFetchFeed === 'function') window._phFetchFeed();
+              }}
+              _prevStatus[b.id] = b.is_running;
+            }});
+          }})
+          .catch(function(){{}});
+      }}
+
+      // Initialize state on page load
+      fetch('/app/robot/status')
+        .then(function(r){{ return r.ok ? r.json() : []; }})
+        .then(function(bots) {{
+          (bots || []).forEach(function(b) {{ _prevStatus[b.id] = b.is_running; }});
+          var anyRunning = (bots || []).some(function(b){{ return b.is_running; }});
+          if (anyRunning) setInterval(_pollBotStatus, 5000);
+        }}).catch(function(){{}});
+    }})();
+
+    // ── Live jobs log polling ──────────────────────────────────────────────
+    (function() {{
+      var _stage_labels = {{
+        'collect_content':'\uD83D\uDD0D Coletar','clean_content':'\uD83E\uDDF9 Limpar',
+        'ai_generate':'\uD83E\uDD16 IA','publish_wp':'\uD83D\uDCE4 Publicar WP',
+        'facebook_publish':'\uD83D\uDCD8 Facebook','auto_stop':'\u23F9 Auto-stop'
+      }};
+      var _status_colors = {{
+        'queued':'#f59e0b','running':'#6366f1','succeeded':'#10b981','failed':'#ef4444'
+      }};
+      var _status_labels = {{
+        'queued':'\u23F3 Pendente','running':'\u26A1 Rodando','succeeded':'\u2713 Conclu\u00EDdo','failed':'\u2715 Falha'
+      }};
+      function _renderLog(rows) {{
+        document.querySelectorAll('[id^="livelog-body-"]').forEach(function(tbody) {{
+          var pid = tbody.id.replace('livelog-body-','');
+          var filtered = rows.filter(function(r){{ return String(r.profile_id) === String(pid); }});
+          if (!filtered.length) {{
+            tbody.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--muted)">Nenhuma atividade recente.</td></tr>';
+            return;
+          }}
+          tbody.innerHTML = filtered.slice(0,30).map(function(r) {{
+            var stageLabel = _stage_labels[r.stage] || r.stage;
+            var statusColor = _status_colors[r.status] || 'var(--muted)';
+            var statusLabel = _status_labels[r.status] || r.status;
+            var titleTxt = r.title || r.url || '\u2014';
+            var durTxt = r.dur > 0 ? r.dur + 's' : '\u2014';
+            var errDiv = r.error ? '<div style="color:#ef4444;font-size:10px;margin-top:2px">'+r.error+'</div>' : '';
+            return '<tr style="border-top:1px solid var(--border)">'
+              +'<td style="padding:8px 12px;max-width:300px"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500">'+titleTxt+'</div>'+errDiv+'</td>'
+              +'<td style="padding:8px 12px;white-space:nowrap">'+stageLabel+'</td>'
+              +'<td style="padding:8px 12px"><span style="font-size:11px;font-weight:700;color:'+statusColor+';background:'+statusColor+'1a;padding:2px 8px;border-radius:20px;white-space:nowrap">'+statusLabel+'</span></td>'
+              +'<td style="padding:8px 12px;color:var(--muted);white-space:nowrap">'+r.when+'</td>'
+              +'<td style="padding:8px 12px;color:var(--muted)">'+durTxt+'</td>'
+              +'</tr>';
+          }}).join('');
+        }});
+      }}
+      function _fetchLiveLog() {{
+        fetch('/app/posts/live-jobs')
+          .then(function(r){{ return r.ok ? r.json() : []; }})
+          .then(_renderLog).catch(function(){{}});
+      }}
+      if (document.querySelector('[id^="livelog-body-"]')) {{
+        _fetchLiveLog();
+        setInterval(_fetchLiveLog, 5000);
+      }}
+    }})();
+
+    // ── Pending post countdowns ────────────────────────────────────────────
+    (function() {{
+      function _fmtCountdown(seconds) {{
+        seconds = Math.max(0, Math.floor(seconds || 0));
+        var h = Math.floor(seconds / 3600);
+        var m = Math.floor((seconds % 3600) / 60);
+        var s = seconds % 60;
+        function pad(n) {{ return String(n).padStart(2, '0'); }}
+        return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s);
+      }}
+      function _tickCountdowns() {{
+        var now = Date.now();
+        document.querySelectorAll('[data-ph-countdown-target]').forEach(function(el) {{
+          var target = Number(el.getAttribute('data-ph-countdown-target') || '0');
+          if (!target) return;
+          var remaining = Math.ceil((target - now) / 1000);
+          el.textContent = remaining > 0 ? _fmtCountdown(remaining) : 'agora';
+        }});
+      }}
+      _tickCountdowns();
+      setInterval(_tickCountdowns, 1000);
     }})();
 
     // ── Sidebar toggle ──────────────────────────────────────────────────────
@@ -1071,7 +1262,13 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       var overlay = document.getElementById('diagOverlay');
       if (overlay) overlay.classList.remove('open');
     }}
-    function confirmDiagStart() {{
+    function confirmDiagStart(autoReconnect) {{
+      var autoInput = document.getElementById('diagAutoReconnectInput');
+      if (autoInput) autoInput.value = autoReconnect ? '1' : '0';
+      var footer = document.getElementById('diagFooter');
+      if (footer) {{
+        footer.innerHTML = '<button type="button" class="btn" disabled style="min-width:180px;opacity:.7">&#9203; Reconectando...</button>';
+      }}
       closeDiagModal();
       document.getElementById('diagStartForm').submit();
     }}
@@ -1109,9 +1306,26 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
             out += '</div></div></div>';
           }});
           document.getElementById('diagItems').innerHTML = out || '<div style="padding:20px;text-align:center;color:var(--muted)">Nenhum resultado.</div>';
+          if (data.summary) {{
+            var s = data.summary;
+            var intText = s.interval_minutes > 0 ? s.interval_minutes + ' min entre posts' : 'sem intervalo';
+            var srcTypes = (s.sources_types || []).join(', ') || '—';
+            var sm = '<div style="margin-top:14px;padding:14px 16px;background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.2);border-radius:12px;font-size:13px">';
+            sm += '<div style="font-weight:700;font-size:13px;margin-bottom:10px;display:flex;align-items:center;gap:7px">&#128203; Resumo da configura\u00e7\u00e3o</div>';
+            sm += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px">';
+            sm += '<div><span style="color:var(--muted)">Posts por sess\u00e3o:</span> <b>' + s.posts_per_day + '</b></div>';
+            sm += '<div><span style="color:var(--muted)">Intervalo:</span> <b>' + intText + '</b></div>';
+            sm += '<div><span style="color:var(--muted)">Fontes:</span> <b>' + s.sources_count + ' configurada' + (s.sources_count !== 1 ? 's' : '') + '</b></div>';
+            sm += '<div><span style="color:var(--muted)">Tipos:</span> <b>' + srcTypes + '</b></div>';
+            if (s.wp_url) sm += '<div style="grid-column:1/-1"><span style="color:var(--muted)">Site WordPress:</span> <b>' + s.wp_url + '</b></div>';
+            sm += '</div></div>';
+            document.getElementById('diagItems').innerHTML += sm;
+          }}
           var footer = '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
           if (data.can_start) {{
-            footer += '<button type="button" class="btn" onclick="confirmDiagStart()" style="min-width:130px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob\u00f4</button>';
+            footer += '<button type="button" class="btn" onclick="confirmDiagStart(false)" style="min-width:130px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob\u00f4</button>';
+          }} else if (data.can_reconnect_start) {{
+            footer += '<button type="button" class="btn" onclick="confirmDiagStart(true)" style="min-width:180px;background:#10b981;border-color:#10b981;color:#fff">&#8635; Reconectar e iniciar</button>';
           }} else {{
             footer += '<button type="button" class="btn" disabled style="min-width:130px;opacity:.4;cursor:not-allowed">&#9658; Iniciar Rob\u00f4</button>';
           }}
@@ -1125,7 +1339,9 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
   </script>
 </body>
 </html>"""
-    return HTMLResponse(page)
+    # Strip surrogate characters that can come from DB emoji/JSON fields
+    safe_page = page.encode("utf-8", errors="replace").decode("utf-8")
+    return HTMLResponse(safe_page)
 
 
 @router.get("/", include_in_schema=False)
@@ -1884,7 +2100,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     for pr in all_profiles:
         is_active = pr.active
         wp_url, p_done, p_fail, p_pend = _proj_stats(pr)
-        pr_emoji = (pr.publish_config_json or {}).get("emoji") or "🤖"
+        pr_emoji = _safe((pr.publish_config_json or {}).get("emoji") or "🤖")
 
         # Badge de status na coluna "Projeto"
         if is_active:
@@ -2001,21 +2217,45 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
                 continue
             _qj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status == JobStatus.queued)) or 0)
             _rj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status == JobStatus.running)) or 0)
-            _pp = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _pr.id, Post.status == PostStatus.pending)) or 0)
-            _pc = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _pr.id, Post.status == PostStatus.processing)) or 0)
-            _ip = (_qj + _rj + _pp + _pc) > 0
-            _pr_emoji = (_pr.publish_config_json or {}).get("emoji") or "🤖"
+            _ip = (_qj + _rj) > 0  # running = only active jobs, not pending posts
+            _pr_emoji = _safe((_pr.publish_config_json or {}).get("emoji") or "🤖")
             _pr_name_esc = html.escape(_pr.name)
             _pr_id = _pr.id
             if _ip:
-                _card_btn = f"<div style='display:flex;flex-direction:column;align-items:center;gap:4px'><span style='font-size:11px;font-weight:700;color:#10b981;letter-spacing:.4px'>&#9889; RODANDO</span><form method='post' action='/app/robot/stop' style='margin:0'><button type='submit' style='background:none;border:none;font-size:11px;color:var(--muted);cursor:pointer;padding:0;text-decoration:underline'>parar</button></form></div>"
+                _card_btn = (f"<form method='post' action='/app/robot/stop' style='margin:0'>"
+                             f"<input type='hidden' name='bot_id' value='{_pr_id}' />"
+                             f"<button type='submit' class='btn-running'"
+                             f" onmouseover=\"this.innerHTML='&#9632; Parar'\""
+                             f" onmouseout=\"this.innerHTML='&#9889; Rodando...'\">&#9889; Rodando...</button>"
+                             f"</form>")
                 _icon_bg = "linear-gradient(135deg,#10b981,#059669)"
-                _sub = "<span style='font-size:11px;color:#10b981;font-weight:600'>&#9889; Processando...</span>"
+                _card_border = "2px solid #10b981"
+                _card_bg = "rgba(16,185,129,.06)"
+                _sub = "<span style='font-size:11px;color:var(--muted)'>Clique no bot&#227;o para parar</span>"
             else:
-                _card_btn = f"<button type='button' class='btn' onclick=\"openDiagModal('{_pr_id}')\" style='font-size:13px;padding:7px 14px'>&#9658; Iniciar</button>"
+                _card_btn = f"<button type='button' class='btn' onclick=\"openDiagModal('{_pr_id}')\" style='font-size:13px;padding:8px 18px'>&#9658; Iniciar</button>"
                 _icon_bg = "linear-gradient(135deg,var(--primary),var(--pink))"
+                _card_border = "1px solid var(--border)"
+                _card_bg = "var(--surface2)"
                 _sub = "<span style='display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#10b981;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.25);border-radius:20px;padding:2px 9px'><span class='dot-pulse'></span>Online</span>"
-            _bot_cards_html += f"""<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:var(--surface2);border:1px solid {'rgba(16,185,129,.3)' if _ip else 'var(--border)'};border-radius:12px;flex:1;min-width:200px"><div style="display:flex;align-items:center;gap:10px"><div style="width:38px;height:38px;border-radius:10px;background:{_icon_bg};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">{_pr_emoji}</div><div><div style="font-size:14px;font-weight:700">{_pr_name_esc}</div><div style="margin-top:3px">{_sub}</div></div></div><div style="flex-shrink:0">{_card_btn}</div></div>"""
+            _bot_cards_html += (f"<div data-bot-id='{_pr_id}' data-bot-running='{'1' if _ip else '0'}'"
+                                f" style='display:flex;align-items:center;justify-content:space-between;gap:12px;"
+                                f"padding:10px 14px;background:{_card_bg};border:{_card_border};"
+                                f"border-radius:12px;flex:1;min-width:200px'>"
+                                f"<div style='display:flex;align-items:center;gap:10px'>"
+                                f"<div style='width:38px;height:38px;border-radius:10px;background:{_icon_bg};"
+                                f"display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0'>{_pr_emoji}</div>"
+                                f"<div><div style='font-size:14px;font-weight:700'>{_pr_name_esc}</div>"
+                                f"<div style='margin-top:3px'>{_sub}</div></div></div>"
+                                f"<div style='flex-shrink:0'>{_card_btn}</div></div>")
+
+        _any_running = any(
+            (int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status.in_([JobStatus.queued, JobStatus.running]))) or 0)) > 0
+            for _pr in all_profiles if _pr.active
+        )
+        _pub_alert = ""
+        if _any_running:
+            _pub_alert = "<div class='publishing-alert'><span class='pal-dot'></span>&#9889; Bot publicando agora — clique em <strong>Rodando...</strong> para interromper</div>"
 
         _active_banner = f"""
     <div class="active-project-banner" style="margin-bottom:14px;flex-direction:column;align-items:stretch;gap:10px">
@@ -2028,7 +2268,8 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
           <button class="btn secondary" style="font-size:13px;padding:7px 14px" type="button" onclick="openWizard()">+ Novo Projeto</button>
         </div>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
+      {_pub_alert}
+      <div style="display:flex;flex-wrap:wrap;gap:8px" id="bot-cards-wrap">
         {_bot_cards_html}
       </div>
     </div>"""
@@ -2071,86 +2312,118 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
       </details>
     </div>
 
-    {_ph("secao-controle-robo")}
-    <div class="card" style="margin-bottom:14px">
-      <details class="toggle-section" open>
-        <summary>
-          <span class="ts-title">
-            <span class="badge-active"><span class="dot-pulse"></span>Ativo</span>
-            {html.escape(bot.name)}
-          </span>
-          <span class="ts-arrow">▶</span>
-        </summary>
-        <div class="ts-body">
-          {_ph("stats-coleta")}
-          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-            <span class="active-project-stat">Coleta: <b>{created}</b> novos / <b>{skipped}</b> rep. / <b>{ignored}</b> ign.</span>
-            <span class="active-project-stat">Fila: <b>{queued_due}</b> prontos / <b>{queued_scheduled}</b> agend. / <b>{running_jobs}</b> rod.</span>
-            <span class="active-project-stat">Posts: <b>{pending_posts}</b> pend. / <b>{processing_posts}</b> proc.</span>
-          </div>
-          <div class="robot-actions">
-            {f'''{_ph("botao-rodar-agora")}<div class="robot-action-card">
-              <div class="robot-action-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">⚡</div>
-              <div><div class="robot-action-title">Rodar pendentes agora</div><div class="robot-action-desc muted">{queued_scheduled} jobs agendados aguardando</div></div>
-              <form method="post" action="/app/robot/run-now" style="margin-left:auto">
-                <button class="btn secondary" type="submit" style="white-space:nowrap">Rodar agora</button>
-              </form>
-            </div>''' if queued_scheduled > 0 and running_jobs == 0 else ''}
-            {_ph("botao-reprocessar-ia")}
-            <div class="robot-action-card">
-              <div class="robot-action-icon" style="background:rgba(99,102,241,.15);color:#6366f1">↺</div>
-              <div><div class="robot-action-title">Reprocessar IA</div><div class="robot-action-desc muted">{failed_count} posts com falha</div></div>
-              <form method="post" action="/app/robot/retry-ai" style="margin-left:auto">
-                <button class="btn secondary" type="submit" style="white-space:nowrap">↺ Reprocessar ({failed_count})</button>
-              </form>
-            </div>
-          </div>
-          {_ph("acoes-avancadas")}
-          <details style="margin-top:12px">
-            <summary style="cursor:pointer;font-size:13px;color:var(--muted);padding:8px 4px;list-style:none;display:flex;align-items:center;gap:6px;border-top:1px solid var(--border)">
-              <span style="font-size:9px">▶</span> Ações avançadas
-            </summary>
-            <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
-              {_ph("btn-limpar-falhas")}
-              <div class="robot-action-card">
-                <div class="robot-action-icon" style="background:rgba(239,68,68,.12);color:#ef4444">🗑</div>
-                <div><div class="robot-action-title">Limpar falhas</div><div class="robot-action-desc muted">Remove posts com erro da fila</div></div>
-                <form method="post" action="/app/robot/clear-failures" style="margin-left:auto">
-                  <button class="btn secondary" type="submit">Limpar falhas</button>
-                </form>
-              </div>
-              {_ph("btn-limpar-historico")}
-              <div class="robot-action-card">
-                <div class="robot-action-icon" style="background:rgba(239,68,68,.12);color:#ef4444">🗑</div>
-                <div><div class="robot-action-title">Limpar histórico</div><div class="robot-action-desc muted">Remove posts do PostHub (não apaga do WP)</div></div>
-                <form method="post" action="/app/robot/clear-posts" style="margin-left:auto">
-                  <button class="btn secondary" type="submit">Limpar posts</button>
-                </form>
-              </div>
-            </div>
-          </details>
-        </div>
-      </details>
-    </div>
+    {_ph("secao-controle-robo")}"""
 
-    {_ph("secao-posts")}
-    <div class="card">
-      <details class="toggle-section" open>
+    # ── Per-bot control cards ────────────────────────────────────────────────
+    _now_ctrl = datetime.utcnow()
+    for _bpr in all_profiles:
+        _bpr_id    = _bpr.id
+        _bpr_name  = html.escape(_bpr.name)
+        _bpr_emoji = _safe((_bpr.publish_config_json or {}).get("emoji") or "🤖")
+        _bpr_active = _bpr.active
+
+        # per-bot stats
+        _b_qd   = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _bpr_id, Job.status == JobStatus.queued,   Job.run_at <= _now_ctrl)) or 0)
+        _b_qs   = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _bpr_id, Job.status == JobStatus.queued,   Job.run_at >  _now_ctrl)) or 0)
+        _b_rj   = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _bpr_id, Job.status == JobStatus.running)) or 0)
+        _b_pp   = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _bpr_id, Post.status == PostStatus.pending))    or 0)
+        _b_proc = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _bpr_id, Post.status == PostStatus.processing)) or 0)
+        _b_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _bpr_id, Post.status == PostStatus.failed))     or 0)
+
+        _b_lc   = db.scalar(select(JobLog).where(JobLog.profile_id == _bpr_id, JobLog.stage == JOB_COLLECT, JobLog.message == "collect_completed").order_by(JobLog.created_at.desc()).limit(1))
+        _b_meta = (_b_lc.meta_json or {}) if _b_lc else {}
+        _b_created = int(_b_meta.get("created") or 0)
+        _b_skipped = int(_b_meta.get("skipped_duplicate") or _b_meta.get("skipped") or 0)
+        _b_ignored = int(_b_meta.get("skipped_non_recipe") or 0) + int(_b_meta.get("skipped_error") or 0)
+
+        if _bpr_active:
+            _b_badge  = "<span class='badge-active' style='font-size:11px;padding:3px 9px'><span class='dot-pulse'></span>Ativo</span>"
+            _b_iconbg = "linear-gradient(135deg,#10b981,#059669)"
+            _b_open   = "open"
+        else:
+            _b_badge  = "<span class='badge-inactive' style='font-size:11px;padding:3px 9px'><span class='dot-off'></span>Inativo</span>"
+            _b_iconbg = "var(--surface2)"
+            _b_open   = ""
+
+        if _bpr_active:
+            _b_actions = f"""
+              <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+                <span class="active-project-stat">Coleta: <b>{_b_created}</b> novos / <b>{_b_skipped}</b> rep. / <b>{_b_ignored}</b> ign.</span>
+                <span class="active-project-stat">Fila: <b>{_b_qd}</b> prontos / <b>{_b_qs}</b> agend. / <b>{_b_rj}</b> rod.</span>
+                <span class="active-project-stat">Posts: <b>{_b_pp}</b> pend. / <b>{_b_proc}</b> proc.</span>
+              </div>
+              <div class="robot-actions">
+                {f'<div class="robot-action-card"><div class="robot-action-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">&#9889;</div><div><div class="robot-action-title">Rodar pendentes agora</div><div class="robot-action-desc muted">{_b_qs} jobs agendados aguardando</div></div><form method="post" action="/app/robot/run-now" style="margin-left:auto"><button class="btn secondary" type="submit" style="white-space:nowrap">Rodar agora</button></form></div>' if _b_qs > 0 and _b_rj == 0 else ''}
+                <div class="robot-action-card">
+                  <div class="robot-action-icon" style="background:rgba(99,102,241,.15);color:#6366f1">&#8635;</div>
+                  <div>
+                    <div class="robot-action-title">Reprocessar IA</div>
+                    <div class="robot-action-desc muted">{_b_fail} posts com falha</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:5px;max-width:340px;line-height:1.5">
+                      Tenta novamente a gera&#231;&#227;o de conte&#250;do via IA para posts que falharam. Use quando houver erros de API da IA ou timeout.
+                    </div>
+                  </div>
+                  <form method="post" action="/app/robot/retry-ai" style="margin-left:auto">
+                    <button class="btn secondary" type="submit" style="white-space:nowrap">&#8635; Reprocessar ({_b_fail})</button>
+                  </form>
+                </div>
+              </div>
+              <details style="margin-top:12px">
+                <summary style="cursor:pointer;font-size:13px;color:var(--muted);padding:8px 4px;list-style:none;display:flex;align-items:center;gap:6px;border-top:1px solid var(--border)">
+                  <span style="font-size:9px">&#9655;</span> A&#231;&#245;es avan&#231;adas
+                </summary>
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+                  <div class="robot-action-card">
+                    <div class="robot-action-icon" style="background:rgba(239,68,68,.12);color:#ef4444">&#128465;</div>
+                    <div><div class="robot-action-title">Limpar falhas</div><div class="robot-action-desc muted">Remove posts com erro da fila</div></div>
+                    <form method="post" action="/app/robot/clear-failures" style="margin-left:auto">
+                      <button class="btn secondary" type="submit">Limpar falhas</button>
+                    </form>
+                  </div>
+                  <div class="robot-action-card">
+                    <div class="robot-action-icon" style="background:rgba(239,68,68,.12);color:#ef4444">&#128465;</div>
+                    <div><div class="robot-action-title">Limpar hist&#243;rico</div><div class="robot-action-desc muted">Remove posts do PostHub (n&#227;o apaga do WP)</div></div>
+                    <form method="post" action="/app/robot/clear-posts" style="margin-left:auto">
+                      <button class="btn secondary" type="submit">Limpar posts</button>
+                    </form>
+                  </div>
+                </div>
+              </details>"""
+        else:
+            _b_done = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _bpr_id, Post.status == PostStatus.completed)) or 0)
+            _b_actions = f"""
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:10px 0">
+                <div style="font-size:13px;color:var(--muted)">
+                  Este bot est&#225; <b>inativo</b>. Ligue-o na tabela acima para come&#231;ar a publicar.
+                </div>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                  <span class="active-project-stat">&#10003; <b>{_b_done}</b> publicados</span>
+                  <span class="active-project-stat">&#9203; <b>{_b_pp}</b> pendentes</span>
+                  <span class="active-project-stat">&#10005; <b>{_b_fail}</b> falhas</span>
+                </div>
+                <a href="/app/profiles/{_bpr_id}" class="btn secondary" style="font-size:12px;padding:6px 14px">&#9881; Configurar</a>
+              </div>"""
+
+        body += f"""
+    <div class="card" style="margin-bottom:10px">
+      <details class="toggle-section" {_b_open}>
         <summary>
-          <span class="ts-title">Posts <span class="ts-badge">{len(posts)}</span></span>
-          <span class="ts-arrow">▶</span>
+          <span class="ts-title" style="display:flex;align-items:center;gap:10px">
+            <div style="width:32px;height:32px;border-radius:9px;background:{_b_iconbg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;border:1px solid var(--border)">{_bpr_emoji}</div>
+            <span style="font-weight:700">{_bpr_name}</span>
+            {_b_badge}
+          </span>
+          <span class="ts-arrow">&#9655;</span>
         </summary>
         <div class="ts-body">
-          {_ph("tabela-posts")}
-          <div class="scrollbox">
-            <table id="robot-posts-table">
-              <thead><tr><th>Título</th><th>Status</th><th>Criado</th><th>WP URL</th></tr></thead>
-              <tbody>{rows}</tbody>
-            </table>
-          </div>
+          {_b_actions}
         </div>
       </details>
-    </div>
+      </div>
+    </details>"""
+
+    body += f"""
+
     """
     diag_modal = """
     <div class="diag-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagModal()">
@@ -2173,6 +2446,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     </div>
     <form id="diagStartForm" method="post" action="/app/robot/start" style="display:none">
       <input type="hidden" id="diagBotIdInput" name="bot_id" value="">
+      <input type="hidden" id="diagAutoReconnectInput" name="auto_reconnect" value="0">
     </form>
     """
     body = body + diag_modal
@@ -2185,8 +2459,98 @@ def bot_redirect(user: User = Depends(get_current_user), db=Depends(get_db)):
     return RedirectResponse(f"/app/profiles/{bot.id}", status_code=status.HTTP_302_FOUND)
 
 
+def _wordpress_connection_for_bot(db, *, bot_id: str):
+    integ = db.scalar(select(Integration).where(Integration.profile_id == bot_id, Integration.type == IntegrationType.WORDPRESS))
+    if not integ:
+        return None, None, None, ""
+    creds = decrypt_json(integ.credentials_encrypted)
+    base_url = str(creds.get("base_url") or "").rstrip("/")
+    users = creds.get("users") if isinstance(creds.get("users"), list) else []
+    if not users and creds.get("username"):
+        users = [{"username": creds["username"], "app_password": creds.get("app_password", "")}]
+    active_uname = str(creds.get("active_username") or "")
+    active_user = next((u for u in users if u.get("username") == active_uname), users[0] if users else None)
+    return integ, creds, active_user, base_url
+
+
+def _test_wordpress_connection(*, base_url: str, active_user: dict | None, timeout: float = 8.0) -> dict:
+    import base64 as _b64
+    from urllib.parse import urljoin as _urljoin
+
+    import httpx as _httpx
+
+    if not base_url:
+        return {"ok": False, "retryable": False, "label": "URL do site nao informada", "detail": "Base URL vazia."}
+    if not active_user or not active_user.get("username") or not active_user.get("app_password"):
+        return {"ok": False, "retryable": False, "label": "Usuario WordPress sem credenciais", "detail": "Usuario ou App Password vazios."}
+
+    username = str(active_user.get("username") or "")
+    app_password = str(active_user.get("app_password") or "")
+    token = _b64.b64encode(f"{username}:{app_password}".encode("utf-8")).decode("ascii")
+    test_url = _urljoin(base_url.rstrip("/") + "/", "wp-json/wp/v2/users/me?context=edit")
+    try:
+        resp = _httpx.get(test_url, headers={"Authorization": f"Basic {token}"}, timeout=timeout, follow_redirects=True, verify=False)
+    except Exception as e:
+        return {
+            "ok": False,
+            "retryable": True,
+            "status_code": None,
+            "label": "WordPress inacessivel",
+            "detail": str(e)[:160],
+        }
+
+    status_code = int(resp.status_code)
+    if status_code == 200:
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
+        display_name = data.get("name") or username
+        roles = data.get("roles") or []
+        return {
+            "ok": True,
+            "retryable": False,
+            "status_code": status_code,
+            "display_name": display_name,
+            "roles": roles,
+            "label": f"WordPress OK - {display_name}",
+            "detail": f"Conectado em {base_url}.",
+        }
+
+    detail = (resp.text or "").strip().replace("\n", " ")[:180]
+    retryable = status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+    if status_code == 401:
+        label = "Credenciais invalidas"
+    elif status_code == 403:
+        label = "Acesso bloqueado"
+    else:
+        label = f"WordPress respondeu {status_code}"
+    return {
+        "ok": False,
+        "retryable": retryable,
+        "status_code": status_code,
+        "label": label,
+        "detail": detail or f"HTTP {status_code}",
+    }
+
+
+def _try_reconnect_wordpress(db, integ: Integration, *, base_url: str, active_user: dict | None) -> dict:
+    result = _test_wordpress_connection(base_url=base_url, active_user=active_user)
+    if not result.get("ok") and result.get("retryable"):
+        result = _test_wordpress_connection(base_url=base_url, active_user=active_user, timeout=12.0)
+    integ.status = IntegrationStatus.CONNECTED if result.get("ok") else IntegrationStatus.ERROR
+    db.add(integ)
+    db.flush()
+    return result
+
+
 @router.post("/app/robot/start", include_in_schema=False)
-def robot_start(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+def robot_start(
+    bot_id: str = Form(default=None),
+    auto_reconnect: str = Form("0"),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
     if bot_id:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
         if not bot:
@@ -2194,26 +2558,24 @@ def robot_start(bot_id: str = Form(default=None), user: User = Depends(get_curre
     else:
         bot = _get_or_create_single_bot(db, user=user)
 
-    # Verifica se WordPress está configurado com usuário e senha
-    wp_integ = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.WORDPRESS))
-    wp_ok = False
-    if wp_integ:
-        try:
-            wp_creds = decrypt_json(wp_integ.credentials_encrypted)
-            users = wp_creds.get("users") if isinstance(wp_creds.get("users"), list) else []
-            if not users and wp_creds.get("username"):
-                users = [{"username": wp_creds["username"], "app_password": wp_creds.get("app_password", "")}]
-            active_uname = str(wp_creds.get("active_username") or "")
-            active_user = next((u for u in users if u.get("username") == active_uname), users[0] if users else None)
-            if active_user and active_user.get("username") and active_user.get("app_password") and wp_creds.get("base_url"):
-                wp_ok = True
-        except Exception:
-            wp_ok = False
-    if not wp_ok:
+    try:
+        wp_integ, _wp_creds, active_user, base_url = _wordpress_connection_for_bot(db, bot_id=bot.id)
+    except Exception:
+        wp_integ, active_user, base_url = None, None, ""
+    if not wp_integ or not base_url or not active_user or not active_user.get("username") or not active_user.get("app_password"):
         return RedirectResponse(
             f"/app/robot?msg={quote_plus('WordPress não configurado. Vá em Configurar → Integrações → WordPress e adicione a URL do site, usuário e App Password.')}",
             status_code=status.HTTP_302_FOUND,
         )
+    wp_test = _try_reconnect_wordpress(db, wp_integ, base_url=base_url, active_user=active_user)
+    if not wp_test.get("ok"):
+        action = "reconectar" if str(auto_reconnect) == "1" else "conectar"
+        detail = str(wp_test.get("detail") or wp_test.get("label") or "")[:140]
+        msg = f"Nao foi possivel {action} ao WordPress: {wp_test.get('label') or 'falha de conexao'}"
+        if detail:
+            msg += f" ({detail})"
+        db.commit()
+        return RedirectResponse(f"/app/robot?msg={quote_plus(msg)}", status_code=status.HTTP_302_FOUND)
 
     queued_jobs = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued)) or 0)
     running_jobs = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.running)) or 0)
@@ -2233,14 +2595,13 @@ def robot_start(bot_id: str = Form(default=None), user: User = Depends(get_curre
         payload={"limit": limit, "interval_minutes": interval_minutes, "respect_schedule": 1 if respect else 0},
     )
     db.commit()
-    return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/app/robot/diagnose", include_in_schema=False)
 def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
     """Diagnóstico rápido: verifica WP credentials + fontes antes de iniciar."""
     from fastapi.responses import JSONResponse
-    import base64 as _b64
     if bot_id:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
         if not bot:
@@ -2250,66 +2611,62 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
     results = []
 
     # ── 1. WordPress ────────────────────────────────────────────
-    wp_integ = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.WORDPRESS))
-    if not wp_integ:
+    wp_can_reconnect = False
+    wp_read_error = False
+    try:
+        wp_integ, _wp_creds, active_user, base_url = _wordpress_connection_for_bot(db, bot_id=bot.id)
+    except Exception as e:
+        wp_read_error = True
+        wp_integ, active_user, base_url = None, None, ""
+        results.append({"key": "wordpress", "status": "err", "label": "Erro ao ler credenciais",
+                         "desc": str(e)[:120], "fix": "Reconfigure a integração WordPress."})
+    if not wp_integ and not wp_read_error:
         results.append({"key": "wordpress", "status": "err", "label": "WordPress não configurado",
                         "desc": "Nenhuma integração WordPress encontrada.",
                         "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e adicione URL, usuário e App Password."})
     else:
-        try:
-            wp_creds = decrypt_json(wp_integ.credentials_encrypted)
-            base_url = (wp_creds.get("base_url") or "").rstrip("/")
-            users = wp_creds.get("users") if isinstance(wp_creds.get("users"), list) else []
-            if not users and wp_creds.get("username"):
-                users = [{"username": wp_creds["username"], "app_password": wp_creds.get("app_password", "")}]
-            active_uname = str(wp_creds.get("active_username") or "")
-            active_user = next((u for u in users if u.get("username") == active_uname), users[0] if users else None)
-
-            if not base_url:
-                results.append({"key": "wordpress", "status": "err", "label": "URL do site não informada",
-                                 "desc": "O campo Base URL está vazio.",
-                                 "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e preencha a URL do site."})
-            elif not active_user or not active_user.get("username") or not active_user.get("app_password"):
-                results.append({"key": "wordpress", "status": "err", "label": "Usuário WordPress sem credenciais",
-                                 "desc": "Usuário ou App Password estão vazios.",
-                                 "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e adicione o App Password."})
+        if not base_url:
+            results.append({"key": "wordpress", "status": "err", "label": "URL do site não informada",
+                             "desc": "O campo Base URL está vazio.",
+                             "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e preencha a URL do site."})
+        elif not active_user or not active_user.get("username") or not active_user.get("app_password"):
+            results.append({"key": "wordpress", "status": "err", "label": "Usuário WordPress sem credenciais",
+                             "desc": "Usuário ou App Password estão vazios.",
+                             "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e adicione o App Password."})
+        else:
+            wp_can_reconnect = True
+            wp_test = _try_reconnect_wordpress(db, wp_integ, base_url=base_url, active_user=active_user)
+            db.commit()
+            if wp_test.get("ok"):
+                display_name = wp_test.get("display_name") or active_user["username"]
+                roles = wp_test.get("roles") or []
+                if not any(r in roles for r in ("administrator", "editor", "author")):
+                    results.append({"key": "wordpress", "status": "warn", "label": f"WordPress conectado — {display_name}",
+                                     "desc": f"Usuário autenticado mas pode não ter permissão para publicar (role: {', '.join(roles) or 'desconhecido'}).",
+                                     "fix": "Use um usuário com role <b>Administrator</b> ou <b>Editor</b>."})
+                else:
+                    results.append({"key": "wordpress", "status": "ok", "label": f"WordPress OK — {display_name}",
+                                     "desc": f"Conectado em <b>{base_url}</b> com role <b>{', '.join(roles)}</b>."})
+            elif wp_test.get("status_code") == 401:
+                results.append({"key": "wordpress", "status": "err", "label": "Credenciais inválidas",
+                                 "desc": f"O WordPress retornou 401 Unauthorized para o usuário <b>{active_user['username']}</b>.",
+                                 "fix": f"Gere um novo App Password em <b>{base_url}/wp-admin/profile.php</b> e atualize em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações</a>."})
+            elif wp_test.get("status_code") == 403:
+                results.append({"key": "wordpress", "status": "err", "label": "Acesso bloqueado (403)",
+                                 "desc": "O WordPress negou o acesso. A API REST pode estar desativada ou bloqueada por plugin de segurança.",
+                                 "fix": "Verifique se a REST API está ativa. Plugins como Wordfence ou iThemes Security podem bloqueá-la."})
             else:
-                # Testa conexão real com a API do WordPress
-                import httpx as _httpx
-                token = _b64.b64encode(f"{active_user['username']}:{active_user['app_password']}".encode()).decode()
-                test_url = f"{base_url}/wp-json/wp/v2/users/me"
-                try:
-                    resp = _httpx.get(test_url, headers={"Authorization": f"Basic {token}"}, timeout=8, follow_redirects=True, verify=False)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        display_name = data.get("name") or active_user["username"]
-                        roles = data.get("roles") or []
-                        if not any(r in roles for r in ("administrator", "editor", "author")):
-                            results.append({"key": "wordpress", "status": "warn", "label": f"WordPress conectado — {display_name}",
-                                             "desc": f"Usuário autenticado mas pode não ter permissão para publicar (role: {', '.join(roles) or 'desconhecido'}).",
-                                             "fix": "Use um usuário com role <b>Administrator</b> ou <b>Editor</b>."})
-                        else:
-                            results.append({"key": "wordpress", "status": "ok", "label": f"WordPress OK — {display_name}",
-                                             "desc": f"Conectado em <b>{base_url}</b> com role <b>{', '.join(roles)}</b>."})
-                    elif resp.status_code == 401:
-                        results.append({"key": "wordpress", "status": "err", "label": "Credenciais inválidas",
-                                         "desc": f"O WordPress retornou 401 Unauthorized para o usuário <b>{active_user['username']}</b>.",
-                                         "fix": f"Gere um novo App Password em <b>{base_url}/wp-admin/profile.php</b> e atualize em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações</a>."})
-                    elif resp.status_code == 403:
-                        results.append({"key": "wordpress", "status": "err", "label": "Acesso bloqueado (403)",
-                                         "desc": "O WordPress negou o acesso. A API REST pode estar desativada ou bloqueada por plugin de segurança.",
-                                         "fix": "Verifique se a REST API está ativa. Plugins como Wordfence ou iThemes Security podem bloqueá-la."})
-                    else:
-                        results.append({"key": "wordpress", "status": "warn", "label": f"WordPress respondeu {resp.status_code}",
-                                         "desc": f"Resposta inesperada de {base_url}.",
-                                         "fix": "Verifique se a URL está correta e se o WordPress está online."})
-                except Exception as e:
+                status_code = wp_test.get("status_code")
+                label = wp_test.get("label") or "WordPress inacessível"
+                detail = html.escape(str(wp_test.get("detail") or "Resposta inesperada.")[:140])
+                if status_code:
+                    results.append({"key": "wordpress", "status": "warn", "label": label,
+                                     "desc": f"Resposta inesperada de <b>{base_url}</b>: {detail}",
+                                     "fix": "Clique em <b>Reconectar e iniciar</b> para testar novamente antes de enfileirar."})
+                else:
                     results.append({"key": "wordpress", "status": "err", "label": "WordPress inacessível",
-                                     "desc": f"Não foi possível conectar em <b>{base_url}</b>: {str(e)[:120]}",
-                                     "fix": "Verifique se a URL está correta e se o site está no ar."})
-        except Exception as e:
-            results.append({"key": "wordpress", "status": "err", "label": "Erro ao ler credenciais",
-                             "desc": str(e)[:120], "fix": "Reconfigure a integração WordPress."})
+                                     "desc": f"Não foi possível conectar em <b>{base_url}</b>: {detail}",
+                                     "fix": "Clique em <b>Reconectar e iniciar</b>. Se falhar de novo, verifique se a URL está correta e se o site está no ar."})
 
     # ── 2. Fontes ───────────────────────────────────────────────
     sources = list(db.scalars(select(Source).where(Source.profile_id == bot.id, Source.active.is_(True))))
@@ -2331,40 +2688,132 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
         results.append({"key": "gemini", "status": "ok", "label": "Gemini configurado", "desc": "IA pronta para reescrever os posts."})
 
     can_start = all(r["status"] != "err" for r in results)
-    return JSONResponse({"results": results, "can_start": can_start, "bot_name": bot.name})
+    can_reconnect_start = bool(
+        wp_can_reconnect
+        and not can_start
+        and not any(r["status"] == "err" and r["key"] != "wordpress" for r in results)
+    )
+    _scfg = bot.schedule_config_json or {}
+    _ppd  = int(_scfg.get("posts_per_day") or 15)
+    _imin = int(_scfg.get("interval_minutes") or 0)
+    _src_types = list({s.type.value for s in sources}) if sources else []
+    _wp_url_diag = ""
+    try:
+        if wp_integ:
+            _wp_url_diag = str(decrypt_json(wp_integ.credentials_encrypted).get("base_url") or "")
+    except Exception:
+        pass
+    summary = {
+        "posts_per_day": _ppd,
+        "interval_minutes": _imin,
+        "sources_count": len(sources),
+        "sources_types": _src_types,
+        "wp_url": _wp_url_diag,
+    }
+    return JSONResponse({
+        "results": results,
+        "can_start": can_start,
+        "can_reconnect_start": can_reconnect_start,
+        "bot_name": bot.name,
+        "summary": summary,
+    })
 
 
 @router.post("/app/robot/stop", include_in_schema=False)
-def robot_stop(user: User = Depends(get_current_user), db=Depends(get_db)):
-    bot = _get_or_create_single_bot(db, user=user)
-    # Cancela todos os jobs em fila e em execução — marca como failed para parar o worker
+def robot_stop(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+    if bot_id:
+        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
+    else:
+        bot = _get_or_create_single_bot(db, user=user)
+    if not bot:
+        return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
     db.execute(
         update(Job)
         .where(Job.profile_id == bot.id, or_(Job.status == JobStatus.queued, Job.status == JobStatus.running))
-        .values(status=JobStatus.failed, error="Parado manualmente pelo usuário")
+        .values(status=JobStatus.failed, last_error="Parado manualmente pelo usu\u00e1rio")
     )
-    # Volta posts em processamento para pendente
     db.execute(
         update(Post)
         .where(Post.profile_id == bot.id, Post.status == PostStatus.processing)
         .values(status=PostStatus.pending)
     )
     db.commit()
-    return RedirectResponse(f"/app/robot?msg={quote_plus('Robô parado.')}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(f"/app/robot?msg={quote_plus('Robô parado com sucesso.')}", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/app/robot/status", include_in_schema=False)
+def robot_status(user: User = Depends(get_current_user), db=Depends(get_db)):
+    """JSON: list of active bots with is_running flag — used by frontend polling."""
+    profiles = list(db.scalars(select(AutomationProfile).where(AutomationProfile.user_id == user.id, AutomationProfile.active.is_(True))))
+    result = []
+    for p in profiles:
+        qj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == p.id, Job.status.in_([JobStatus.queued, JobStatus.running]))) or 0)
+        result.append({"id": p.id, "name": p.name, "is_running": qj > 0})
+    return _JSONResponse(result)
+
+
+@router.get("/app/posts/live-jobs", include_in_schema=False)
+def posts_live_jobs(user: User = Depends(get_current_user), db=Depends(get_db)):
+    """Recent jobs with post title/URL for the live activity log."""
+    rows = list(db.execute(
+        select(Job, CollectedContent.title, CollectedContent.canonical_url, AutomationProfile.name.label("bot_name"))
+        .outerjoin(Post, Post.id == Job.post_id)
+        .outerjoin(CollectedContent, CollectedContent.id == Post.collected_content_id)
+        .outerjoin(AutomationProfile, AutomationProfile.id == Job.profile_id)
+        .where(Job.user_id == user.id)
+        .order_by(Job.updated_at.desc())
+        .limit(60)
+    ).all())
+    tz = _user_zoneinfo(user)
+    result = []
+    for job, title, url, bot_name in rows:
+        started = job.created_at
+        updated = job.updated_at
+        dur = int((updated - started).total_seconds()) if updated and started else 0
+        try:
+            when = updated.replace(tzinfo=timezone.utc).astimezone(tz).strftime("%H:%M:%S")
+        except Exception:
+            when = str(updated)[:19]
+        result.append({
+            "id": job.id,
+            "bot": str(bot_name or ""),
+            "title": str(title or "")[:80],
+            "url": str(url or "")[:120],
+            "stage": job.type,
+            "status": job.status.value,
+            "when": when,
+            "dur": dur,
+            "error": str(job.last_error or "")[:120],
+            "profile_id": job.profile_id or "",
+        })
+    return _JSONResponse(result)
 
 
 @router.post("/app/robot/run-now", include_in_schema=False)
-def robot_run_now(user: User = Depends(get_current_user), db=Depends(get_db)):
-    bot = _get_or_create_single_bot(db, user=user)
+def robot_run_now(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+    if bot_id:
+        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
+    else:
+        bot = _get_or_create_single_bot(db, user=user)
+    if not bot:
+        return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
     now = datetime.utcnow()
+    queued = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued)) or 0)
+    if queued <= 0:
+        return RedirectResponse("/app/posts?msg=Nenhuma+pend%C3%AAncia+para+rodar+agora.", status_code=status.HTTP_302_FOUND)
     db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
     db.commit()
-    return RedirectResponse("/app/robot?msg=Fila+liberada.+Rodando+agora.", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/app/posts?msg=Fila+liberada.", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/robot/retry-ai", include_in_schema=False)
-def robot_retry_ai(user: User = Depends(get_current_user), db=Depends(get_db)):
-    bot = _get_or_create_single_bot(db, user=user)
+def robot_retry_ai(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+    if bot_id:
+        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
+    else:
+        bot = _get_or_create_single_bot(db, user=user)
+    if not bot:
+        return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
     posts = list(
         db.scalars(
             select(Post)
@@ -2373,6 +2822,9 @@ def robot_retry_ai(user: User = Depends(get_current_user), db=Depends(get_db)):
             .limit(50)
         )
     )
+    if not posts:
+        redirect_to = "/app/posts?msg=Nenhuma+falha+para+reprocessar." if bot_id else "/app/robot"
+        return RedirectResponse(redirect_to, status_code=status.HTTP_302_FOUND)
     for p in posts:
         p.status = PostStatus.pending
         p.updated_at = datetime.utcnow()
@@ -2386,7 +2838,8 @@ def robot_retry_ai(user: User = Depends(get_current_user), db=Depends(get_db)):
             payload={"collected_content_id": p.collected_content_id},
         )
     db.commit()
-    return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
+    redirect_to = "/app/posts?msg=IA+reagendada." if bot_id else "/app/robot"
+    return RedirectResponse(redirect_to, status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/robot/clear-failures", include_in_schema=False)
@@ -2529,19 +2982,64 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         ("ia",          "IA"),
         ("publicacao",  "Publicação"),
         ("agendamento", "Agendamento"),
-        ("posts",       "Posts"),
     ]
     _tab_label = dict(tabs).get(tab, tab)
+    import random as _rnd_cfg
+    _cfg_sleep_msgs = [
+        ("&#128564;", "zzZZ... todos os bots em repouso."),
+        ("&#127769;", "Modo noturno. Nenhum rob&#244; ativo no momento."),
+        ("&#9749;", "Pausa total. Hora do caf&#233; enquanto configura."),
+        ("&#127775;", "Silencioso por aqui. Ligue um bot para animar."),
+        ("&#128123;", "Fantasma no ar... nenhum bot rodando."),
+    ]
+    _cfg_sleep_icon, _cfg_sleep_text = _rnd_cfg.choice(_cfg_sleep_msgs)
+    _any_active_profiles = list(db.scalars(select(AutomationProfile).where(AutomationProfile.user_id == user.id, AutomationProfile.active == True)))
+
+    if _any_active_profiles:
+        _bot_chips = ""
+        for _ap in _any_active_profiles:
+            if _ap.id == p.id:
+                _chip_style = (
+                    "display:inline-flex;align-items:center;gap:7px;"
+                    "padding:8px 18px;border-radius:22px;"
+                    "background:rgba(16,185,129,.22);border:2px solid rgba(16,185,129,.7);"
+                    "text-decoration:none;color:var(--text);font-weight:700;font-size:13px;"
+                    "box-shadow:0 0 0 3px rgba(16,185,129,.15);transition:background .15s"
+                )
+            else:
+                _chip_style = (
+                    "display:inline-flex;align-items:center;gap:7px;"
+                    "padding:8px 18px;border-radius:22px;"
+                    "background:rgba(16,185,129,.04);border:1px solid rgba(16,185,129,.18);"
+                    "text-decoration:none;color:var(--muted);font-weight:500;font-size:13px;"
+                    "opacity:.55;transition:background .15s"
+                )
+            _bot_chips += (
+                f"<a href='/app/profiles/{_ap.id}?tab={tab}' style='{_chip_style}'>"
+                f"<span class='dot-pulse'></span>{html.escape(_ap.name)}</a>"
+            )
+        _banner_main = (
+            f"<div style='display:flex;flex-direction:column;gap:8px'>"
+            f"<span style='font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--muted)'>Bots ativos</span>"
+            f"<div style='display:flex;flex-wrap:wrap;gap:8px'>{_bot_chips}</div>"
+            f"</div>"
+        )
+    else:
+        _banner_main = (
+            f"<div style='display:flex;align-items:center;gap:10px'>"
+            f"<span style='font-size:22px'>{_cfg_sleep_icon}</span>"
+            f"<span style='font-size:14px;color:var(--muted)'>{_cfg_sleep_text}</span>"
+            f"</div>"
+        )
+
     body = f"""
     {_ph("banner-projeto-configurar")}
     <div class="active-project-banner" style="margin-bottom:14px">
-      <div>
-        <div class="active-project-label">Projeto</div>
-        <div class="active-project-name">{html.escape(p.name)}</div>
+      <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+        {_banner_main}
       </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span class="active-project-stat">Configurando: <b>{html.escape(_tab_label)}</b></span>
-        <a href="/app/robot" class="btn secondary" style="font-size:13px;padding:7px 14px">← Voltar ao Robô</a>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex-shrink:0">
+        <a href="/app/robot" class="btn secondary" style="font-size:13px;padding:7px 14px">&#8592; Voltar ao Rob&#244;</a>
       </div>
     </div>
     """
@@ -2550,53 +3048,179 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         body += f"<div class='card' style='border-color: rgba(255,255,255,.08)'><b>{html.escape(msg)}</b></div>"
 
     if tab == "fontes":
-        sources = list(db.scalars(select(Source).where(Source.profile_id == p.id).order_by(Source.created_at.desc())))
-        rows = "".join(
-            f"<tr><td><span class='pill'>{html.escape(s.type.value)}</span></td><td>{html.escape(s.value)}</td>"
-            f"<td><form method='post' action='/app/profiles/{p.id}/sources/{s.id}/delete' style='margin:0'><button class='btn secondary' type='submit'>Remover</button></form></td></tr>"
-            for s in sources
-        )
+        _all_fontes_profiles = list(db.scalars(
+            select(AutomationProfile)
+            .where(AutomationProfile.user_id == user.id)
+            .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
+        ))
+
+        def _src_rows(srcs, icon, color, pid):
+            if not srcs:
+                return "<tr><td colspan='2' style='padding:18px;text-align:center;color:var(--muted);font-size:13px'>Nenhuma cadastrada ainda.</td></tr>"
+            out = ""
+            for s in srcs:
+                out += (
+                    f"<tr style='border-top:1px solid var(--border)'>"
+                    f"<td style='padding:10px 14px;font-size:13px;word-break:break-all'>"
+                    f"<div style='display:flex;align-items:flex-start;gap:10px'>"
+                    f"<span style='width:22px;height:22px;border-radius:6px;background:{color};display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:11px;margin-top:1px'>{icon}</span>"
+                    f"<span style='font-weight:500;color:var(--text);line-height:1.4'>{html.escape(s.value)}</span>"
+                    f"</div></td>"
+                    f"<td style='padding:10px 14px;text-align:right;white-space:nowrap'>"
+                    f"<form method='post' action='/app/profiles/{pid}/sources/{s.id}/delete' style='margin:0'>"
+                    f"<button class='btn flat' type='submit' style='font-size:11px;padding:4px 10px;color:#ef4444;border-color:rgba(239,68,68,.25)' "
+                    f"onclick=\"return confirm('Remover esta fonte?')\">&#128465; Remover</button></form></td></tr>"
+                )
+            return out
+
         body += f"""
         {_ph("tab-fontes")}
-        <div class="card" style="margin-bottom:14px">
-          <details class="toggle-section" open>
-            <summary><span class="ts-title">Adicionar Fonte</span><span class="ts-arrow">▶</span></summary>
-            <div class="ts-body">
-              {_ph("form-adicionar-fonte")}
-              <div class="row">
-                <div class="col card">
-                  <form method="post" action="/app/profiles/{p.id}/sources/create">
-                    {_ph("select-tipo-fonte")}
-                    <label>Tipo</label>
-                    <select name="type">
-                      <option value="URL">URL</option>
-                      <option value="RSS">RSS</option>
-                      <option value="KEYWORD">PALAVRA-CHAVE</option>
-                    </select>
-                    <label style="margin-top:8px">Valor</label>
-                    {_ph("input-valor-fonte")}
-                    <input name="value" required />
-                    <div style="margin-top:12px">{_ph("btn-salvar-fonte")}<button class="btn" type="submit">Salvar</button></div>
-                  </form>
-                </div>
-              </div>
-            </div>
-          </details>
-        </div>
-        <div class="card">
-          <details class="toggle-section" open>
-            <summary><span class="ts-title">Fontes Cadastradas <span class="ts-badge">{len(sources)}</span></span><span class="ts-arrow">▶</span></summary>
-            <div class="ts-body">
-              {_ph("tabela-fontes-cadastradas")}
-              <div class="scrollbox">
-                <table id="sources-table"><thead><tr><th>Tipo</th><th>Valor</th><th></th></tr></thead><tbody>{rows}</tbody></table>
-              </div>
-            </div>
-          </details>
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:12px 16px;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:12px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.6">
+          <span style="font-size:18px;flex-shrink:0">&#128278;</span>
+          <div>Gerencie as <b>fontes de conte&#250;do</b> de cada bot abaixo. <b>URL</b> = p&#225;gina/site &nbsp;&#124;&nbsp; <b>RSS</b> = feed XML &nbsp;&#124;&nbsp; <b>Palavra-chave</b> = busca por termo.</div>
         </div>
         """
+        for _fp in _all_fontes_profiles:
+            _fp_sources = list(db.scalars(select(Source).where(Source.profile_id == _fp.id).order_by(Source.created_at.desc())))
+            _fp_url = [s for s in _fp_sources if s.type.value == "URL"]
+            _fp_rss = [s for s in _fp_sources if s.type.value == "RSS"]
+            _fp_kw  = [s for s in _fp_sources if s.type.value == "KEYWORD"]
+            _fp_total = len(_fp_sources)
+            _fp_open = "open" if (_fp.active or _fp.id == p.id) else ""
+            _fp_name_esc = html.escape(_fp.name)
+            _fp_id = _fp.id
+            _fp_plural = "s" if _fp_total != 1 else ""
+            if _fp.active:
+                _fp_badge = "<span class='badge-active' style='font-size:10px;padding:2px 7px'><span class='dot-pulse'></span>Ativo</span>"
+            else:
+                _fp_badge = "<span class='badge-inactive' style='font-size:10px;padding:2px 7px;opacity:.8'><span class='dot-off'></span>Inativo</span>"
+            _fp_url_rows = _src_rows(_fp_url, "&#127758;", "rgba(14,165,233,.15)", _fp_id)
+            _fp_rss_rows = _src_rows(_fp_rss, "&#128268;", "rgba(245,158,11,.15)", _fp_id)
+            _fp_kw_rows  = _src_rows(_fp_kw,  "&#128269;", "rgba(16,185,129,.15)", _fp_id)
+            _fp_n_url = len(_fp_url)
+            _fp_n_rss = len(_fp_rss)
+            _fp_n_kw  = len(_fp_kw)
+            _fp_alert_id = "src-alert-" + _fp_id.replace("-", "")
+            if _fp.active:
+                _fp_form_onsubmit = ""
+                _fp_btn_extra = ""
+                _fp_alert_block = ""
+                _fp_input_required = "required"
+            else:
+                _fp_input_required = ""
+                _fp_form_onsubmit = (
+                    "onsubmit=\"event.preventDefault();"
+                    "var el=document.getElementById('" + _fp_alert_id + "');"
+                    "el.style.display='flex';"
+                    "setTimeout(function(){{el.style.display='none';}},4000);\""
+                )
+                _fp_btn_extra = "opacity:.55;cursor:not-allowed;"
+                _fp_alert_block = (
+                    "<div id='" + _fp_alert_id + "' style='display:none;align-items:center;gap:9px;"
+                    "margin-top:10px;padding:10px 14px;background:rgba(239,68,68,.08);"
+                    "border:1px solid rgba(239,68,68,.3);border-radius:8px;font-size:13px;color:#ef4444'>"
+                    "&#9888; Bot <b>inativo</b>. Ative o bot para adicionar novas fontes.</div>"
+                )
+            body += f"""
+            <div class="card" style="margin-bottom:14px">
+              <details class="toggle-section" {_fp_open}>
+                <summary>
+                  <span class="ts-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <span style="font-weight:700;font-size:14px">{_fp_name_esc}</span>
+                    {_fp_badge}
+                    <span class="ts-badge" style="color:var(--muted);border-color:var(--border2)">{_fp_total} fonte{_fp_plural}</span>
+                  </span>
+                  <span class="ts-arrow">&#9655;</span>
+                </summary>
+                <div class="ts-body">
+                  <!-- Add source form -->
+                  <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);margin-bottom:14px">
+                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px">Adicionar fonte</div>
+                    <form method="post" action="/app/profiles/{_fp_id}/sources/create" {_fp_form_onsubmit}>
+                      <div style="display:grid;grid-template-columns:150px 1fr auto;gap:10px;align-items:flex-end">
+                        <div>
+                          <label style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block">Tipo</label>
+                          <select name="type" style="margin:0">
+                            <option value="URL">&#127758; URL</option>
+                            <option value="RSS">&#128268; RSS</option>
+                            <option value="KEYWORD">&#128269; Palavra-chave</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block">Valor</label>
+                          <input name="value" placeholder="https://... ou termo de busca" {_fp_input_required} style="margin:0" />
+                        </div>
+                        <button class="btn flat" type="submit" style="height:42px;padding:0 20px;font-size:15px;font-weight:700;letter-spacing:0;{_fp_btn_extra}">+ Adicionar</button>
+                      </div>
+                      {_fp_alert_block}
+                    </form>
+                  </div>
+                  <!-- URL sources -->
+                  <details class="toggle-section" open>
+                    <summary>
+                      <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+                        <span style="width:22px;height:22px;border-radius:6px;background:rgba(14,165,233,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">&#127758;</span>
+                        URLs <span class="ts-badge" style="color:#0ea5e9;border-color:rgba(14,165,233,.3)">{_fp_n_url}</span>
+                      </span>
+                      <span class="ts-arrow">&#9655;</span>
+                    </summary>
+                    <div class="ts-body" style="padding:0">
+                      <table style="width:100%;border-collapse:collapse">
+                        <thead><tr style="background:var(--surface2)">
+                          <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Endere&#231;o</th>
+                          <th style="padding:9px 14px;width:110px"></th>
+                        </tr></thead>
+                        <tbody>{_fp_url_rows}</tbody>
+                      </table>
+                    </div>
+                  </details>
+                  <!-- RSS sources -->
+                  <details class="toggle-section" style="margin-top:8px">
+                    <summary>
+                      <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+                        <span style="width:22px;height:22px;border-radius:6px;background:rgba(245,158,11,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">&#128268;</span>
+                        Feeds RSS <span class="ts-badge" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">{_fp_n_rss}</span>
+                      </span>
+                      <span class="ts-arrow">&#9655;</span>
+                    </summary>
+                    <div class="ts-body" style="padding:0">
+                      <table style="width:100%;border-collapse:collapse">
+                        <thead><tr style="background:var(--surface2)">
+                          <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Feed URL</th>
+                          <th style="padding:9px 14px;width:110px"></th>
+                        </tr></thead>
+                        <tbody>{_fp_rss_rows}</tbody>
+                      </table>
+                    </div>
+                  </details>
+                  <!-- Keyword sources -->
+                  <details class="toggle-section" style="margin-top:8px">
+                    <summary>
+                      <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+                        <span style="width:22px;height:22px;border-radius:6px;background:rgba(16,185,129,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">&#128269;</span>
+                        Palavras-chave <span class="ts-badge" style="color:#10b981;border-color:rgba(16,185,129,.3)">{_fp_n_kw}</span>
+                      </span>
+                      <span class="ts-arrow">&#9655;</span>
+                    </summary>
+                    <div class="ts-body" style="padding:0">
+                      <table style="width:100%;border-collapse:collapse">
+                        <thead><tr style="background:var(--surface2)">
+                          <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Termo</th>
+                          <th style="padding:9px 14px;width:110px"></th>
+                        </tr></thead>
+                        <tbody>{_fp_kw_rows}</tbody>
+                      </table>
+                    </div>
+                  </details>
+                </div>
+              </details>
+            </div>
+            """
     elif tab == "publicacao":
         publish_cfg = dict(p.publish_config_json or {})
+        _pub_sched_cfg = dict(p.schedule_config_json or {})
+        _pub_posts_per_day = int(_pub_sched_cfg.get("posts_per_day") or 15)
+        _pub_interval_min  = int(_pub_sched_cfg.get("interval_minutes") or 0)
         fb_link_place = str(publish_cfg.get("facebook_link", "comments"))
         fb_enabled = bool(publish_cfg.get("facebook_enabled"))
         fb_selected = publish_cfg.get("facebook_page_ids") or []
@@ -2634,50 +3258,219 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             fb_pages_html = "".join(items) or "<div class='muted'>Nenhuma página válida cadastrada.</div>"
         else:
             fb_pages_html = f"<div class='muted'>Nenhuma página cadastrada. Vá em <a href='/app/profiles/{p.id}?tab=integracoes'>Integrações</a> e adicione suas páginas.</div>"
+        ptab = (request.query_params.get("ptab") or "wordpress").strip().lower()
+        _wp_svg = ("<svg width='15' height='15' viewBox='0 0 24 24' fill='currentColor'>"
+                   "<path d='M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2z"
+                   "M3.251 12c0-1.308.265-2.556.741-3.695L7.36 18.658A8.762 8.762 0 0 1 3.251 12z"
+                   "m8.749 8.75a8.773 8.773 0 0 1-2.496-.364l2.65-7.695 2.716 7.44a.96.96 0 0 0 .07.136"
+                   " 8.764 8.764 0 0 1-2.94.483zm1.211-12.981c.528-.028.999-.084.999-.084"
+                   "-.47-.056.415-.748-.056-.72 0 0-1.415.111-2.329.111-.858 0-2.3-.111-2.3-.111"
+                   "-.47-.028-.526.692-.055.72 0 0 .444.056.914.084l1.358 3.72-1.908 5.721"
+                   "-3.176-8.441c.528-.028 1-.084 1-.084.47-.056.415-.748-.056-.72 0 0"
+                   "-1.415.111-2.329.111a12.65 12.65 0 0 1-.31-.005A8.752 8.752 0 0 1 12 3.25"
+                   "c2.294 0 4.389.879 5.963 2.315a2.885 2.885 0 0 0-.19-.013"
+                   "c-.858 0-1.468.748-1.468 1.551 0 .72.415 1.329.859 2.049"
+                   ".332.581.719 1.329.719 2.409 0 .748-.287 1.617-.663 2.825l-.871 2.907"
+                   "-3.138-9.534zm3.64 11.791-.012-.025 2.733-7.897c.51-1.274.68-2.293.68-3.199"
+                   " 0-.329-.021-.634-.059-.921A8.751 8.751 0 0 1 20.75 12c0 3.216-1.731 6.031-4.319 7.56l.42-1z'/>"
+                   "</svg>")
+        _fb_svg = ("<svg width='15' height='15' viewBox='0 0 24 24' fill='currentColor'>"
+                   "<path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12"
+                   "c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43"
+                   "c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83"
+                   "c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385"
+                   "C19.612 23.027 24 18.062 24 12.073z'/></svg>")
+
+        def _ptab_btn(key, icon_svg, label, color, active_color):
+            is_a = ptab == key
+            if is_a:
+                style = f"background:{active_color};color:#fff;border-color:{active_color};box-shadow:0 4px 14px {active_color}44"
+            else:
+                style = "background:var(--surface);color:var(--muted);border-color:var(--border2)"
+            return (f"<a href='?tab=publicacao&ptab={key}' style='display:inline-flex;align-items:center;gap:8px;"
+                    f"padding:9px 22px;border-radius:12px;font-size:13px;font-weight:700;"
+                    f"border:1.5px solid;text-decoration:none;transition:all .2s;{style}'>"
+                    f"{icon_svg} {label}</a>")
+
+        ptab_nav = (f"<div style='display:flex;gap:10px;margin-bottom:22px'>"
+                    + _ptab_btn("wordpress", _wp_svg, "WordPress", "#21759b", "#21759b")
+                    + _ptab_btn("facebook",  _fb_svg, "Facebook",  "#1877f2", "#1877f2")
+                    + "</div>")
+
+        # Build fb pages cards HTML outside f-string to avoid backslash-in-expression issues
+        _no_pages_link = f"/app/profiles/{p.id}?tab=integracoes&itab=facebook"
+        if fb_pages:
+            _fb_cards = []
+            _fb_icon_path = "M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"
+            for pg in fb_pages:
+                pg_id   = str(pg.get("page_id") or "").strip()
+                if not pg_id: continue
+                pg_nm   = html.escape(str(pg.get("name") or "") or "P\u00e1gina sem nome")
+                pg_id_e = html.escape(pg_id[:20])
+                is_sel  = (not fb_selected_ids or pg_id in fb_selected_ids)
+                border  = "rgba(24,119,242,.4)" if is_sel else "var(--border2)"
+                bg      = "rgba(24,119,242,.06)" if is_sel else "transparent"
+                chk     = "checked" if is_sel else ""
+                _fb_cards.append(
+                    f"<label style='display:flex;align-items:center;gap:10px;padding:10px 14px;"
+                    f"border:1.5px solid {border};border-radius:10px;cursor:pointer;background:{bg}'>"
+                    f"<input type='checkbox' name='facebook_page_ids' value='{html.escape(pg_id)}' {chk} style='width:16px;height:16px;flex-shrink:0' />"
+                    f"<svg width='18' height='18' viewBox='0 0 24 24' fill='#1877f2'><path d='{_fb_icon_path}'/></svg>"
+                    f"<div><div style='font-weight:600;font-size:13px'>{pg_nm}</div>"
+                    f"<div style='font-size:11px;color:var(--muted)'>ID: {pg_id_e}</div></div></label>"
+                )
+            _fb_pages_cards_html = "<div style='display:flex;flex-direction:column;gap:8px'>" + "".join(_fb_cards) + "</div>"
+        else:
+            _fb_pages_cards_html = (
+                f"<div style='padding:20px;text-align:center;background:var(--surface2);"
+                f"border-radius:10px;border:1px dashed var(--border2)'>"
+                f"<div style='font-size:24px;margin-bottom:8px'>&#128441;</div>"
+                f"<div style='font-size:13px;color:var(--muted)'>Nenhuma p&#225;gina cadastrada. "
+                f"<a href='{_no_pages_link}' style='color:#1877f2;font-weight:600'>"
+                f"Adicionar nas Integra&#231;&#245;es &#8594;</a></div></div>"
+            )
+
+        if ptab == "facebook":
+            ptab_content = f"""
+            {_ph("publicacao-facebook")}
+            <!-- Facebook header -->
+            <div style="display:flex;align-items:center;gap:16px;padding:18px 22px;background:linear-gradient(135deg,#1877f2,#0d65d9);border-radius:14px;margin-bottom:18px;color:#fff">
+              <div style="width:48px;height:48px;border-radius:12px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                <svg width='26' height='26' viewBox='0 0 24 24' fill='#fff'>
+                  <path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z'/>
+                </svg>
+              </div>
+              <div>
+                <div style="font-weight:800;font-size:16px">Publica&#231;&#227;o no Facebook</div>
+                <div style="font-size:12px;opacity:.85;margin-top:2px">Configure suas p&#225;ginas e prefer&#234;ncias de postagem</div>
+              </div>
+              <div style="margin-left:auto">
+                {"<span style='background:rgba(255,255,255,.25);border:1px solid rgba(255,255,255,.4);border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700'>&#9679; Ativo</span>" if fb_enabled else "<span style='background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;opacity:.7'>Inativo</span>"}
+              </div>
+            </div>
+            <form method="post" action="/app/profiles/{p.id}/publish/facebook">
+              <!-- Enable toggle -->
+              <div class="card" style="margin-bottom:14px;padding:18px 22px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+                  <div>
+                    <div style="font-weight:700;font-size:14px">Ativar postagem autom&#225;tica</div>
+                    <div style="font-size:12px;color:var(--muted);margin-top:3px">Quando ativo, cada artigo publicado no site gera tamb&#233;m um post no Facebook</div>
+                  </div>
+                  <label style="position:relative;display:inline-block;width:50px;height:26px;flex-shrink:0">
+                    <input type="checkbox" name="facebook_enabled" value="1" {"checked" if fb_enabled else ""} style="width:0;height:0;opacity:0;position:absolute" id="fb-toggle-{p.id}" />
+                    <span onclick="var cb=document.getElementById('fb-toggle-{p.id}');cb.checked=!cb.checked"
+                      style="position:absolute;cursor:pointer;inset:0;border-radius:34px;background:{'#1877f2' if fb_enabled else 'var(--border2)'};transition:.3s">
+                      <span style="position:absolute;content:'';height:20px;width:20px;left:{'26px' if fb_enabled else '3px'};bottom:3px;border-radius:50%;background:#fff;transition:.3s"></span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <!-- Pages -->
+              <div class="card" style="margin-bottom:14px;padding:18px 22px">
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">P&#225;ginas selecionadas</div>
+                <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Escolha em quais p&#225;ginas o conte&#250;do ser&#225; publicado</div>
+                {_ph("fb-pages-list")}
+                {_fb_pages_cards_html}
+              </div>
+              <!-- Link placement -->
+              <div class="card" style="margin-bottom:18px;padding:18px 22px">
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">Onde inserir o link do artigo</div>
+                <div style="font-size:12px;color:var(--muted);margin-bottom:14px">O link redireciona para o artigo no WordPress</div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                  <label style="flex:1;min-width:160px;display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid {'rgba(24,119,242,.5)' if fb_link_place=='comments' else 'var(--border2)'};border-radius:10px;cursor:pointer;background:{'rgba(24,119,242,.06)' if fb_link_place=='comments' else 'transparent'}">
+                    <input type="radio" name="facebook_link" value="comments" {"checked" if fb_link_place == "comments" else ""} style="width:16px;height:16px" />
+                    <div><div style="font-weight:600;font-size:13px">&#128172; Nos coment&#225;rios</div><div style="font-size:11px;color:var(--muted)">Link no 1&#186; coment&#225;rio do post</div></div>
+                  </label>
+                  <label style="flex:1;min-width:160px;display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid {'rgba(24,119,242,.5)' if fb_link_place=='body' else 'var(--border2)'};border-radius:10px;cursor:pointer;background:{'rgba(24,119,242,.06)' if fb_link_place=='body' else 'transparent'}">
+                    <input type="radio" name="facebook_link" value="body" {"checked" if fb_link_place == "body" else ""} style="width:16px;height:16px" />
+                    <div><div style="font-weight:600;font-size:13px">&#128196; No texto</div><div style="font-size:11px;color:var(--muted)">Link inclu&#237;do no corpo do post</div></div>
+                  </label>
+                </div>
+              </div>
+              <div style="display:flex;justify-content:flex-end">
+                <button class="btn" type="submit" style="background:#1877f2;border-color:#1877f2;padding:11px 28px;font-size:14px">
+                  <svg width='14' height='14' viewBox='0 0 24 24' fill='#fff' style='margin-right:6px'><path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z'/></svg>
+                  Salvar Facebook
+                </button>
+              </div>
+            </form>"""
+        else:
+            ptab_content = f"""
+            {_ph("publicacao-wordpress")}
+            <div style="display:flex;align-items:center;gap:16px;padding:18px 22px;background:linear-gradient(135deg,#21759b,#155f82);border-radius:14px;margin-bottom:18px;color:#fff">
+              <div style="width:48px;height:48px;border-radius:12px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                <svg width='26' height='26' viewBox='0 0 24 24' fill='#fff'>
+                  <path d='M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zM3.251 12c0-1.308.265-2.556.741-3.695L7.36 18.658A8.762 8.762 0 0 1 3.251 12zm8.749 8.75a8.773 8.773 0 0 1-2.496-.364l2.65-7.695 2.716 7.44a.96.96 0 0 0 .07.136 8.764 8.764 0 0 1-2.94.483zm1.211-12.981c.528-.028.999-.084.999-.084.47-.056.415-.748-.056-.72 0 0-1.415.111-2.329.111-.858 0-2.3-.111-2.3-.111-.47-.028-.526.692-.055.72 0 0 .444.056.914.084l1.358 3.72-1.908 5.721-3.176-8.441c.528-.028 1-.084 1-.084.47-.056.415-.748-.056-.72 0 0-1.415.111-2.329.111a12.65 12.65 0 0 1-.31-.005A8.752 8.752 0 0 1 12 3.25c2.294 0 4.389.879 5.963 2.315a2.885 2.885 0 0 0-.19-.013c-.858 0-1.468.748-1.468 1.551 0 .72.415 1.329.859 2.049.332.581.719 1.329.719 2.409 0 .748-.287 1.617-.663 2.825l-.871 2.907-3.138-9.534zm3.64 11.791-.012-.025 2.733-7.897c.51-1.274.68-2.293.68-3.199 0-.329-.021-.634-.059-.921A8.751 8.751 0 0 1 20.75 12c0 3.216-1.731 6.031-4.319 7.56l.42-1z'/>
+                </svg>
+              </div>
+              <div>
+                <div style="font-weight:800;font-size:16px">Publica&#231;&#227;o no WordPress</div>
+                <div style="font-size:12px;opacity:.85;margin-top:2px">Configure categorias e prefer&#234;ncias de conte&#250;do</div>
+              </div>
+            </div>
+            <form method="post" action="/app/profiles/{p.id}/publish/wordpress">
+              <div class="card" style="margin-bottom:14px;padding:18px 22px">
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">Categoria padr&#227;o</div>
+                <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Usada quando a IA n&#227;o consegue identificar a categoria correta</div>
+                <input name="default_category" value="{html.escape(default_cat)}" required placeholder="Ex: Not&#237;cias" />
+              </div>
+              <div class="card" style="margin-bottom:18px;padding:18px 22px">
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">Categorias do site</div>
+                <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Liste <b>exatamente</b> como aparecem no WordPress — uma por linha. A IA escolhe 1 dessa lista.</div>
+                <textarea name="categories" placeholder="Receitas&#10;Viagens&#10;Tecnologia&#10;Sa&#250;de" style="min-height:180px;font-size:13px">{html.escape(cats_lines)}</textarea>
+                <div style="margin-top:8px;font-size:11px;color:var(--muted)">Categorias com nomes diferentes do WordPress causam erros de classifica&#231;&#227;o.</div>
+              </div>
+              <div style="display:flex;justify-content:flex-end">
+                <button class="btn" type="submit" style="background:#21759b;border-color:#21759b;padding:11px 28px;font-size:14px">
+                  <svg width='14' height='14' viewBox='0 0 24 24' fill='#fff' style='margin-right:6px'><path d='M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2z'/></svg>
+                  Salvar WordPress
+                </button>
+              </div>
+            </form>"""
+
         body += f"""
         {_ph("tab-publicacao")}
-        <div class="card">
+        <!-- Cadência de Publicação -->
+        <div class="card" style="margin-bottom:14px">
           <details class="toggle-section" open>
-            <summary><span class="ts-title">Publicação</span><span class="ts-arrow">▶</span></summary>
+            <summary>
+              <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+                <span style="width:26px;height:26px;border-radius:7px;background:rgba(139,92,246,.15);display:inline-flex;align-items:center;justify-content:center;font-size:13px">&#128203;</span>
+                Cad&#234;ncia de Publica&#231;&#227;o
+              </span>
+              <span class="ts-arrow">&#9655;</span>
+            </summary>
             <div class="ts-body">
-          <div class="row">
-            <div class="col card">
-              {_ph("publicacao-wordpress")}
-              <h4>WordPress</h4>
-              <form method="post" action="/app/profiles/{p.id}/publish/wordpress">
-                <label>Categoria padrão (se a IA errar)</label>
-                <input name="default_category" value="{html.escape(default_cat)}" required />
-                <label>Categorias do seu site (uma por linha)</label>
-                <textarea name="categories" placeholder="Cole aqui as categorias do seu WordPress (uma por linha)">{html.escape(cats_lines)}</textarea>
-                <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
-              </form>
-              <p class="muted" style="margin-top:10px">A IA escolhe 1 categoria exatamente como está nessa lista.</p>
-            </div>
-            <div class="col card">
-              {_ph("publicacao-facebook")}
-              <h4>Facebook</h4>
-              <form method="post" action="/app/profiles/{p.id}/publish/facebook">
-                <label style="display:flex; gap:10px; align-items:center">
-                  <input type="checkbox" name="facebook_enabled" value="1" {"checked" if fb_enabled else ""} />
-                  <span>Ativar postagem no Facebook</span>
-                </label>
-                <label style="margin-top:10px">Páginas</label>
-                <div class="scrollbox" style="max-height: 220px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px;">
-                  {fb_pages_html}
+              <p class="muted" style="margin-bottom:14px">Define quantos posts o bot vai publicar por ciclo e o espa&#231;amento entre cada um.</p>
+              <form method="post" action="/app/profiles/{p.id}/schedule">
+                <input type="hidden" name="next_tab" value="publicacao" />
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                  <div>
+                    <label>Posts por sess&#227;o</label>
+                    <input name="posts_per_day" type="number" min="1" step="1" value="{_pub_posts_per_day}" />
+                    <div class="muted" style="margin-top:5px;font-size:12px">Quantidade m&#225;xima de posts publicados por ciclo do bot</div>
+                  </div>
+                  <div>
+                    <label>Intervalo entre postagens (min)</label>
+                    <input name="interval_minutes" type="number" min="0" step="1" value="{_pub_interval_min}" />
+                    <div class="muted" style="margin-top:5px;font-size:12px">0 = publica tudo seguido sem pausa entre os posts</div>
+                  </div>
                 </div>
-                <label>Link</label>
-                <select name="facebook_link">
-                  <option value="comments" {"selected" if fb_link_place == "comments" else ""}>Nos comentários</option>
-                  <option value="body" {"selected" if fb_link_place == "body" else ""}>No texto</option>
-                </select>
-                <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
+                <div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+                  <div style="font-size:12px;color:var(--muted)">
+                    &#128161; Configura&#231;&#245;es de data/hora e agendamento avan&#231;ado est&#227;o na aba <b>Agendamento</b>.
+                  </div>
+                  <button class="btn flat" type="submit" style="gap:6px;padding:9px 22px">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    Salvar cad&#234;ncia
+                  </button>
+                </div>
               </form>
-              <p class="muted" style="margin-top:10px">A postagem no Facebook roda depois do WordPress. Você escolhe as páginas e onde entra o link.</p>
-            </div>
-          </div>
             </div>
           </details>
         </div>
+        {ptab_nav}
+        {ptab_content}
         """
     elif tab == "integracoes":
         integrations = list(db.scalars(select(Integration).where(Integration.profile_id == p.id).order_by(Integration.created_at.desc())))
@@ -2761,51 +3554,73 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 wp_users = []
 
         wp_user_rows = ""
+        _svg_edit = "<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7'/><path d='M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z'/></svg>"
+        _svg_trash = "<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='3 6 5 6 21 6'/><path d='M19 6l-1 14H6L5 6'/><path d='M10 11v6'/><path d='M14 11v6'/><path d='M9 6V4h6v2'/></svg>"
+        _svg_save  = "<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z'/><polyline points='17 21 17 13 7 13 7 21'/><polyline points='7 3 7 8 15 8'/></svg>"
         for _wu_idx, wu in enumerate(wp_users):
             uname = html.escape(str(wu.get("username") or ""))
             raw_pass = html.escape(str(wu.get("app_password") or ""), quote=True)
             is_active_wu = (wu.get("username") == wp_active_username)
             _pid = f"wpp-{p.id}-{_wu_idx}"
+            _edit_row_id = "wp-edit-" + _pid
             status_badge = "<span class='badge-active' style='font-size:11px;padding:3px 8px'><span class='dot-pulse'></span>Em uso</span>" if is_active_wu else "<span class='badge-inactive' style='font-size:11px;padding:3px 8px'><span class='dot-off'></span>Inativo</span>"
             usar_btn = (
                 "<span style='font-size:11px;color:var(--muted)'>—</span>"
                 if is_active_wu else
                 f"<form method='post' action='/app/profiles/{p.id}/integrations/wordpress/set-active-user' style='margin:0'>"
                 f"<input type='hidden' name='username' value='{uname}' />"
-                f"<button class='btn' style='font-size:12px;padding:4px 12px' type='submit'>Usar</button></form>"
+                f"<button class='btn flat' style='font-size:12px;padding:5px 12px' type='submit'>Usar</button></form>"
+            )
+            edit_btn = (
+                "<button type='button' class='btn flat' style='font-size:12px;padding:5px 12px;gap:5px' "
+                "onclick=\"var r=document.getElementById('" + _edit_row_id + "');"
+                "r.style.display=r.style.display==='none'?'table-row':'none'\">"
+                + _svg_edit + "Editar</button>"
             )
             del_btn = (
-                "" if is_active_wu else
                 f"<form method='post' action='/app/profiles/{p.id}/integrations/wordpress/remove-user' style='margin:0'>"
                 f"<input type='hidden' name='username' value='{uname}' />"
-                f"<button class='btn secondary' style='font-size:12px;padding:4px 10px;color:#ef4444' type='submit'>"
-                f"<svg width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'>"
-                f"<polyline points='3 6 5 6 21 6'/><path d='M19 6l-1 14H6L5 6'/><path d='M10 11v6'/><path d='M14 11v6'/><path d='M9 6V4h6v2'/>"
-                f"</svg></button></form>"
+                f"<button class='btn flat' type='submit' style='font-size:12px;padding:5px 12px;color:#ef4444;border-color:rgba(239,68,68,.25);gap:5px' "
+                f"onclick=\"return confirm('Remover este usu\u00e1rio?')\">"
+                + _svg_trash + f"Remover</button></form>"
             )
             pass_cell = (
                 f"<div style='display:flex;align-items:center;gap:5px'>"
                 f"<span id='{_pid}' data-pass='{raw_pass}' data-shown='0' "
-                f"style='font-family:monospace;font-size:12px;color:var(--muted);letter-spacing:1px'>••••••••</span>"
+                f"style='font-family:monospace;font-size:12px;color:var(--muted);letter-spacing:1px'>&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</span>"
                 f"<button type='button' id='{_pid}-btn' "
                 f"onclick=\"var s=document.getElementById('{_pid}');var shown=s.dataset.shown==='1';"
-                f"s.textContent=shown?'••••••••':s.dataset.pass;s.dataset.shown=shown?'0':'1';"
-                f"document.getElementById('{_pid}-btn').innerHTML=shown?'<svg width=\\'13\\'height=\\'13\\'viewBox=\\'0 0 24 24\\'fill=\\'none\\'stroke=\\'currentColor\\'stroke-width=\\'2\\'><path d=\\'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z\\'/><circle cx=\\'12\\'cy=\\'12\\'r=\\'3\\'/></svg>':'<svg width=\\'13\\'height=\\'13\\'viewBox=\\'0 0 24 24\\'fill=\\'none\\'stroke=\\'currentColor\\'stroke-width=\\'2\\'><path d=\\'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24\\'/><line x1=\\'1\\'y1=\\'1\\'x2=\\'23\\'y2=\\'23\\'/></svg>'\" "
+                f"s.textContent=shown?'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022':s.dataset.pass;s.dataset.shown=shown?'0':'1';\" "
                 f"style='background:none;border:none;cursor:pointer;color:var(--muted);padding:2px;display:flex;align-items:center'>"
                 f"<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'>"
                 f"<path d='M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z'/><circle cx='12' cy='12' r='3'/></svg>"
                 f"</button></div>"
+            )
+            edit_row = (
+                f"<tr id='{_edit_row_id}' style='display:none;background:var(--surface2);border-top:1px solid var(--border)'>"
+                f"<td colspan='4' style='padding:16px 18px'>"
+                f"<form method='post' action='/app/profiles/{p.id}/integrations/wordpress/edit-user'>"
+                f"<input type='hidden' name='old_username' value='{uname}' />"
+                f"<div style='display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:flex-end'>"
+                f"<div><label style='font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block'>Usu\u00e1rio</label>"
+                f"<input name='new_username' value='{uname}' required style='margin:0' /></div>"
+                f"<div><label style='font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block'>App Password</label>"
+                f"<input name='new_app_password' type='password' placeholder='Nova senha (deixe vazio para manter)' style='margin:0' /></div>"
+                f"<button class='btn flat' type='submit' style='height:42px;padding:0 18px;gap:6px'>"
+                + _svg_save + f"Salvar</button>"
+                f"</div></form></td></tr>"
             )
             wp_user_rows += (
                 f"<tr style='border-top:1px solid var(--border)'>"
                 f"<td style='padding:13px 18px'><span style='font-size:14px;font-weight:600'>{uname}</span></td>"
                 f"<td style='padding:13px 18px'>{status_badge}</td>"
                 f"<td style='padding:13px 18px'>{pass_cell}</td>"
-                f"<td style='padding:13px 18px;text-align:right'><div style='display:flex;gap:8px;align-items:center;justify-content:flex-end'>{usar_btn}{del_btn}</div></td>"
+                f"<td style='padding:13px 18px;text-align:right'><div style='display:flex;gap:8px;align-items:center;justify-content:flex-end'>{usar_btn}{edit_btn}{del_btn}</div></td>"
                 f"</tr>"
+                + edit_row
             )
         if not wp_user_rows:
-            wp_user_rows = "<tr><td colspan='4' style='padding:20px 18px;text-align:center;color:var(--muted);font-size:13px'>Nenhum usuário cadastrado.</td></tr>"
+            wp_user_rows = "<tr><td colspan='4' style='padding:20px 18px;text-align:center;color:var(--muted);font-size:13px'>Nenhum usu\u00e1rio cadastrado.</td></tr>"
 
         wp_base_field = "" if wp_integ else """
             <label>Base URL do Site</label>
@@ -3030,21 +3845,80 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 <tbody>{fb_rows}</tbody>
               </table>
             </div>"""
-        else:  # conexoes
-            itab_content = f"""
-            <div style="border:1px solid var(--border);border-radius:14px;overflow:hidden">
-              <table style="width:100%;border-collapse:collapse">
-                <thead>
-                  <tr style="background:var(--surface2)">
-                    <th style="padding:11px 18px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Tipo</th>
-                    <th style="padding:11px 18px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">URL / Detalhe</th>
-                    <th style="padding:11px 18px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Status</th>
-                    <th style="padding:11px 18px;text-align:right;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Ações</th>
-                  </tr>
-                </thead>
-                <tbody>{conn_rows}</tbody>
-              </table>
-            </div>"""
+        else:  # conexoes — per-bot view across all profiles
+            _all_conn_profiles = list(db.scalars(select(AutomationProfile).where(AutomationProfile.user_id == user.id).order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())))
+            _conn_sections = ""
+            for _cp in _all_conn_profiles:
+                _cp_integ = list(db.scalars(select(Integration).where(Integration.profile_id == _cp.id).order_by(Integration.type, Integration.created_at.desc())))
+                _cp_emoji = (_cp.publish_config_json or {}).get("emoji") or "&#129302;"
+                _cp_name  = html.escape(_cp.name)
+                _cp_active_badge = ("<span class='badge-active' style='font-size:10px;padding:2px 8px'><span class='dot-pulse'></span>Ativo</span>"
+                                    if _cp.active else
+                                    "<span class='badge-inactive' style='font-size:10px;padding:2px 8px'><span class='dot-off'></span>Inativo</span>")
+                _cp_rows = ""
+                for _ci in _cp_integ:
+                    try:
+                        _ci_creds = decrypt_json(_ci.credentials_encrypted)
+                    except Exception:
+                        _ci_creds = {}
+                    if _ci.type == IntegrationType.WORDPRESS:
+                        _ci_url = str(_ci_creds.get("base_url") or "—")
+                    elif _ci.type == IntegrationType.FACEBOOK:
+                        _ci_pages = _ci_creds.get("pages") or []
+                        _ci_url = f"{len(_ci_pages)} p&#225;gina(s)" if _ci_pages else "—"
+                    elif _ci.type == IntegrationType.GEMINI:
+                        _ci_url = str(_ci_creds.get("model") or "—")
+                    else:
+                        _ci_url = html.escape(_ci.name)
+                    _ci_connected = _ci.status.value == "CONNECTED"
+                    if _ci_connected:
+                        _ci_status_html = ("<span style='display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#10b981'>"
+                                           "<span class='dot-pulse' style='width:8px;height:8px;border-radius:50%;background:#10b981;flex-shrink:0'></span>"
+                                           "Conectado</span>")
+                    else:
+                        _ci_status_html = ("<span style='display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#ef4444'>"
+                                           "<span style='width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0;opacity:.7'></span>"
+                                           "Desconectado</span>")
+                    _cp_rows += (
+                        f"<tr style='border-top:1px solid var(--border)'>"
+                        f"<td style='padding:11px 16px'><span class='pill'>{html.escape(_ci.type.value)}</span></td>"
+                        f"<td style='padding:11px 16px;font-size:13px;word-break:break-all;max-width:240px'>{html.escape(_ci_url)}</td>"
+                        f"<td style='padding:11px 16px'>{_ci_status_html}</td>"
+                        f"<td style='padding:11px 16px;text-align:right'>"
+                        f"<form method='post' action='/app/profiles/{_cp.id}/integrations/{_ci.id}/delete' style='margin:0'>"
+                        f"<button type='submit' style='display:inline-flex;align-items:center;gap:5px;background:none;border:none;cursor:pointer;"
+                        f"font-size:12px;color:#ef4444;padding:4px 8px;border-radius:6px;font-family:inherit;transition:background .15s' "
+                        f"onmouseover=\"this.style.background='rgba(239,68,68,.1)'\" onmouseout=\"this.style.background='none'\" "
+                        f"onclick=\"return confirm('Remover esta integra&#231;&#227;o?')\">"
+                        f"<svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+                        f"<polyline points='3 6 5 6 21 6'/><path d='M19 6l-1 14H6L5 6'/><path d='M10 11v6'/><path d='M14 11v6'/><path d='M9 6V4h6v2'/>"
+                        f"</svg>Remover</button></form></td></tr>"
+                    )
+                if not _cp_rows:
+                    _cp_rows = f"<tr><td colspan='4' style='padding:18px;text-align:center;color:var(--muted);font-size:13px'>Nenhuma integra&#231;&#227;o cadastrada.</td></tr>"
+                _conn_sections += f"""
+                <div style="margin-bottom:14px">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                    <span style="font-size:17px">{_cp_emoji}</span>
+                    <span style="font-weight:700;font-size:14px">{_cp_name}</span>
+                    {_cp_active_badge}
+                    <a href="/app/profiles/{_cp.id}?tab=integracoes" style="margin-left:auto;font-size:12px;color:var(--primary);text-decoration:none;font-weight:600">Gerenciar &#8594;</a>
+                  </div>
+                  <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden">
+                    <table style="width:100%;border-collapse:collapse">
+                      <thead><tr style="background:var(--surface2)">
+                        <th style="padding:9px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Tipo</th>
+                        <th style="padding:9px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Detalhe</th>
+                        <th style="padding:9px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Status</th>
+                        <th style="padding:9px 16px;text-align:right;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">A&#231;&#245;es</th>
+                      </tr></thead>
+                      <tbody>{_cp_rows}</tbody>
+                    </table>
+                  </div>
+                </div>"""
+            if not _conn_sections:
+                _conn_sections = "<div style='padding:20px;text-align:center;color:var(--muted);font-size:13px'>Nenhum projeto criado ainda.</div>"
+            itab_content = _conn_sections
 
         body += f"""
         {_ph("tab-integracoes")}
@@ -3112,226 +3986,127 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
           </details>
         </div>
         """
+    elif tab == "posts":
+        return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
     elif tab == "ia":
-        site_action = db.scalar(
-            select(AiAction)
-            .where(AiAction.profile_id == p.id, AiAction.destination == ActionDestination.WORDPRESS)
-            .order_by(AiAction.created_at.asc())
-            .limit(1)
-        )
-        fb_action = db.scalar(
-            select(AiAction)
-            .where(AiAction.profile_id == p.id, AiAction.destination == ActionDestination.FACEBOOK)
-            .order_by(AiAction.created_at.asc())
-            .limit(1)
-        )
-        site_prompt = (site_action.prompt_text if site_action else "").strip()
-        fb_prompt = (fb_action.prompt_text if fb_action else "").strip()
+        _wp_icon_ia = ("<svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor' style='flex-shrink:0'>"
+                       "<path d='M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2z"
+                       "M3.251 12c0-1.308.265-2.556.741-3.695L7.36 18.658A8.762 8.762 0 0 1 3.251 12z"
+                       "m8.749 8.75a8.773 8.773 0 0 1-2.496-.364l2.65-7.695 2.716 7.44a.96.96 0 0 0 .07.136"
+                       " 8.764 8.764 0 0 1-2.94.483zm1.211-12.981c.528-.028.999-.084.999-.084"
+                       " .47-.056.415-.748-.056-.72 0 0-1.415.111-2.329.111-.858 0-2.3-.111-2.3-.111"
+                       "-.47-.028-.526.692-.055.72 0 0 .444.056.914.084l1.358 3.72-1.908 5.721"
+                       "-3.176-8.441c.528-.028 1-.084 1-.084.47-.056.415-.748-.056-.72 0 0"
+                       "-1.415.111-2.329.111a12.65 12.65 0 0 1-.31-.005A8.752 8.752 0 0 1 12 3.25"
+                       "c2.294 0 4.389.879 5.963 2.315a2.885 2.885 0 0 0-.19-.013"
+                       "c-.858 0-1.468.748-1.468 1.551 0 .72.415 1.329.859 2.049"
+                       ".332.581.719 1.329.719 2.409 0 .748-.287 1.617-.663 2.825l-.871 2.907"
+                       "-3.138-9.534zm3.64 11.791-.012-.025 2.733-7.897c.51-1.274.68-2.293.68-3.199"
+                       " 0-.329-.021-.634-.059-.921A8.751 8.751 0 0 1 20.75 12c0 3.216-1.731 6.031-4.319 7.56l.42-1z'/>"
+                       "</svg>")
+        _fb_icon_ia = ("<svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor' style='flex-shrink:0'>"
+                       "<path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12"
+                       "c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43"
+                       "c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83"
+                       "c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385"
+                       "C19.612 23.027 24 18.062 24 12.073z'/></svg>")
+        _all_ia_profiles = list(db.scalars(
+            select(AutomationProfile)
+            .where(AutomationProfile.user_id == user.id)
+            .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
+        ))
         body += f"""
         {_ph("tab-ia-comandos")}
-        <div class="card">
-          <details class="toggle-section" open>
-            <summary><span class="ts-title">Comandos da IA</span><span class="ts-arrow">▶</span></summary>
-            <div class="ts-body">
-              {_ph("form-prompts-ia")}
-              <p class="muted">Você pode editar o comando do site e do Facebook quando quiser.</p>
-              <form method="post" action="/app/profiles/{p.id}/ai-prompts">
-                <div class="row">
-                  <div class="col card">
-                    {_ph("prompt-wordpress")}
-                    <h4>Site (WordPress)</h4>
-                    <textarea name="site_prompt" placeholder="Cole o comando do site aqui">{html.escape(site_prompt)}</textarea>
-                  </div>
-                  <div class="col card">
-                    {_ph("prompt-facebook")}
-                    <h4>Facebook</h4>
-                    <textarea name="facebook_prompt" placeholder="Cole o comando do Facebook aqui">{html.escape(fb_prompt)}</textarea>
-                  </div>
-                </div>
-                <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
-              </form>
-            </div>
-          </details>
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:12px 16px;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:12px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.6">
+          <span style="font-size:18px;flex-shrink:0">&#9889;</span>
+          <div>O <b>prompt da IA</b> define como o conte&#250;do ser&#225; reescrito para cada destino.
+          Escreva instru&#231;&#245;es claras — tom de voz, formato, tamanho, hashtags, etc.
+          Cada bot tem seu pr&#243;prio conjunto de prompts independente.</div>
         </div>
         """
-    else:
-        posts = list(
-            db.execute(
-                select(Post, CollectedContent.title)
-                .join(CollectedContent, CollectedContent.id == Post.collected_content_id)
-                .where(Post.profile_id == p.id)
-                .order_by(Post.created_at.desc())
-                .limit(200)
-            ).all()
-        )
-        pending_rows = completed_rows = failed_rows = ""
-        n_completed = n_failed = n_pending = 0
-        for post, title in posts:
-            when = _fmt_dt(post.published_at or post.created_at, user=user)
-            is_canceled = isinstance(post.outputs_json, dict) and bool(post.outputs_json.get("canceled_by_user"))
-            st = "cancelado" if (post.status == PostStatus.failed and is_canceled) else post.status.value
-            safe_title = html.escape(str(title or "Sem título"))
-            wp_url = post.wp_url or ""
-            chk = f"<input type='checkbox' name='post_id' value='{html.escape(post.id)}' style='width:15px;height:15px;cursor:pointer'/>"
-
-            if post.status in (PostStatus.pending, PostStatus.processing):
-                n_pending += 1
-                icon = "⚙️" if post.status == PostStatus.processing else "📝"
-                st_badge = f"<span style='font-size:11px;font-weight:700;color:{'#f59e0b' if post.status==PostStatus.processing else 'var(--muted)'};text-transform:uppercase;letter-spacing:.4px'>{html.escape(st)}</span>"
-                pending_rows += (
-                    f"<tr style='border-top:1px solid var(--border)'>"
-                    f"<td style='padding:10px 14px;width:36px'>{chk}</td>"
-                    f"<td style='padding:10px 14px;font-size:13px'>{icon} {safe_title}</td>"
-                    f"<td style='padding:10px 14px'>{st_badge}</td>"
-                    f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{html.escape(when)}</td>"
-                    f"<td style='padding:10px 14px;font-size:12px;color:var(--muted)'>—</td>"
-                    f"</tr>"
-                )
-            elif post.status == PostStatus.completed:
-                n_completed += 1
-                wp_link = (f"<a href='{html.escape(wp_url)}' target='_blank' rel='noopener' "
-                           f"style='display:inline-flex;align-items:center;gap:4px;color:#10b981;font-size:12px;font-weight:600;text-decoration:none'>"
-                           f"🔗 Ver post</a>") if wp_url else "<span style='color:var(--muted);font-size:12px'>—</span>"
-                completed_rows += (
-                    f"<tr style='border-top:1px solid rgba(16,185,129,.15);border-left:3px solid #10b981;background:rgba(16,185,129,.04)'>"
-                    f"<td style='padding:11px 14px;width:36px'>{chk}</td>"
-                    f"<td style='padding:11px 14px'>"
-                    f"  <div style='display:flex;align-items:center;gap:8px'>"
-                    f"    <span style='width:22px;height:22px;border-radius:50%;background:#10b981;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:11px'>✓</span>"
-                    f"    <span style='font-size:13px;font-weight:600;color:var(--text)'>{safe_title}</span>"
-                    f"  </div>"
-                    f"</td>"
-                    f"<td style='padding:11px 14px'><span style='color:#10b981;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;background:rgba(16,185,129,.12);padding:3px 8px;border-radius:20px'>✓ Publicado</span></td>"
-                    f"<td style='padding:11px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{html.escape(when)}</td>"
-                    f"<td style='padding:11px 14px'>{wp_link}</td>"
-                    f"</tr>"
-                )
+        for _ip in _all_ia_profiles:
+            _ip_site_action = db.scalar(
+                select(AiAction)
+                .where(AiAction.profile_id == _ip.id, AiAction.destination == ActionDestination.WORDPRESS)
+                .order_by(AiAction.created_at.asc()).limit(1)
+            )
+            _ip_fb_action = db.scalar(
+                select(AiAction)
+                .where(AiAction.profile_id == _ip.id, AiAction.destination == ActionDestination.FACEBOOK)
+                .order_by(AiAction.created_at.asc()).limit(1)
+            )
+            _ip_site_prompt = (_ip_site_action.prompt_text if _ip_site_action else "").strip()
+            _ip_fb_prompt   = (_ip_fb_action.prompt_text   if _ip_fb_action   else "").strip()
+            _ip_open = "open" if (_ip.active or _ip.id == p.id) else ""
+            _ip_name_esc = html.escape(_ip.name)
+            _ip_id = _ip.id
+            if _ip.active:
+                _ip_badge = "<span class='badge-active' style='font-size:10px;padding:2px 7px'><span class='dot-pulse'></span>Ativo</span>"
             else:
-                n_failed += 1
-                err_msg = ""
-                if isinstance(post.outputs_json, dict):
-                    err_msg = str(post.outputs_json.get("error") or "")[:80]
-                failed_rows += (
-                    f"<tr style='border-top:1px solid rgba(239,68,68,.15);border-left:3px solid #ef4444;background:rgba(239,68,68,.04)'>"
-                    f"<td style='padding:11px 14px;width:36px'>{chk}</td>"
-                    f"<td style='padding:11px 14px'>"
-                    f"  <div>"
-                    f"    <div style='display:flex;align-items:center;gap:8px'>"
-                    f"      <span style='width:22px;height:22px;border-radius:50%;background:#ef4444;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:11px;color:#fff'>✕</span>"
-                    f"      <span style='font-size:13px;font-weight:600;color:var(--text)'>{safe_title}</span>"
-                    f"    </div>"
-                    f"    {'<div style=\"font-size:11px;color:#ef4444;margin-top:3px;padding-left:30px\">'+html.escape(err_msg)+'</div>' if err_msg else ''}"
-                    f"  </div>"
-                    f"</td>"
-                    f"<td style='padding:11px 14px'><span style='color:#ef4444;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;background:rgba(239,68,68,.12);padding:3px 8px;border-radius:20px'>{'Cancelado' if is_canceled else 'Erro'}</span></td>"
-                    f"<td style='padding:11px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{html.escape(when)}</td>"
-                    f"<td style='padding:11px 14px;font-size:12px;color:var(--muted)'>—</td>"
-                    f"</tr>"
-                )
-
-        def _posts_table(tid, rows, empty_msg):
-            thead = ("<tr style='background:var(--surface2)'>"
-                     "<th style='padding:10px 14px;width:36px'></th>"
-                     "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Título</th>"
-                     "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Status</th>"
-                     "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Quando</th>"
-                     "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Link</th>"
-                     "</tr>")
-            body_rows = rows or f"<tr><td colspan='5' style='padding:20px;text-align:center;color:var(--muted);font-size:13px'>{empty_msg}</td></tr>"
-            return (f"<div style='border:1px solid var(--border);border-radius:12px;overflow:hidden'>"
-                    f"<table id='{tid}' style='width:100%;border-collapse:collapse'>"
-                    f"<thead>{thead}</thead><tbody>{body_rows}</tbody></table></div>")
-
-        body += f"""
-        {_ph("tab-posts-gerenciar")}
-        <div class="card" style="margin-bottom:14px">
-          <details class="toggle-section" open>
-            <summary><span class="ts-title">Ações em Massa</span><span class="ts-arrow">▶</span></summary>
-            <div class="ts-body">
-              {_ph("acoes-bulk-posts")}
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-                <form method="post" action="/app/profiles/{p.id}/posts/cancel-all" style="margin:0">
-                  <button class="btn secondary" type="submit" style="font-size:12px;padding:6px 12px">Cancelar pendentes</button>
-                </form>
-                <form method="post" action="/app/profiles/{p.id}/posts/delete-completed" style="margin:0">
-                  <button class="btn secondary" type="submit" style="font-size:12px;padding:6px 12px">Apagar publicados</button>
-                </form>
-              </div>
-              <p class="muted" style="font-size:12px;margin:0">Cancelar = para a fila (não apaga do WordPress). Apagar = remove do PostHub.</p>
-            </div>
-          </details>
-        </div>
-
-        <div class="card" style="margin-bottom:14px">
-          <details class="toggle-section" open>
-            <summary>
-              <span class="ts-title">
-                <span style="width:22px;height:22px;border-radius:6px;background:rgba(16,185,129,.15);display:inline-flex;align-items:center;justify-content:center;font-size:12px">✓</span>
-                Publicados <span class="ts-badge" style="color:#10b981;border-color:rgba(16,185,129,.3)">{n_completed}</span>
-              </span>
-              <span class="ts-arrow">▶</span>
-            </summary>
-            <div class="ts-body">
-              <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-                <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-completed-table tbody')">Limpar lista</button>
-              </div>
-              <form method="post" action="/app/profiles/{p.id}/posts/bulk">
-                {_posts_table("posts-completed-table", completed_rows, "Nenhum post publicado ainda.")}
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-                  <button class="btn secondary" type="submit" name="mode" value="delete" style="font-size:12px">Excluir selecionados (PostHub)</button>
-                  <button class="btn secondary" type="submit" name="mode" value="delete_wp" style="font-size:12px;color:#ef4444"
-                    onclick="return confirm('Tem certeza que quer APAGAR do site (WordPress)?')">Apagar do WordPress</button>
+                _ip_badge = "<span class='badge-inactive' style='font-size:10px;padding:2px 7px;opacity:.8'><span class='dot-off'></span>Inativo</span>"
+            _ip_wp_status = ("<span style='margin-left:auto;font-size:10px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:2px 8px;border-radius:20px'>&#9679; Configurado</span>"
+                             if _ip_site_prompt else
+                             "<span style='margin-left:auto;font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);padding:2px 8px;border-radius:20px'>Vazio</span>")
+            _ip_fb_status  = ("<span style='margin-left:auto;font-size:10px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:2px 8px;border-radius:20px'>&#9679; Configurado</span>"
+                              if _ip_fb_prompt else
+                              "<span style='margin-left:auto;font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);padding:2px 8px;border-radius:20px'>Vazio</span>")
+            _ip_site_esc = html.escape(_ip_site_prompt)
+            _ip_fb_esc   = html.escape(_ip_fb_prompt)
+            body += f"""
+            <div class="card" style="margin-bottom:14px">
+              <details class="toggle-section" {_ip_open}>
+                <summary>
+                  <span class="ts-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <span style="font-weight:700;font-size:14px">{_ip_name_esc}</span>
+                    {_ip_badge}
+                  </span>
+                  <span class="ts-arrow">&#9655;</span>
+                </summary>
+                <div class="ts-body">
+                  <form method="post" action="/app/profiles/{_ip_id}/ai-prompts">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch;margin-bottom:16px">
+                      <!-- WordPress prompt -->
+                      <div class="card" style="padding:20px;border-top:3px solid #21759b;display:flex;flex-direction:column;height:100%;box-sizing:border-box">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                          <div style="width:36px;height:36px;border-radius:9px;background:#21759b;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0">
+                            {_wp_icon_ia}
+                          </div>
+                          <div>
+                            <div style="font-weight:700;font-size:14px">WordPress</div>
+                            <div style="font-size:11px;color:var(--muted)">Prompt para artigos do site</div>
+                          </div>
+                          {_ip_wp_status}
+                        </div>
+                        <textarea name="site_prompt" placeholder="Ex: Reescreva o conte&#250;do como um artigo SEO em portugu&#234;s. Use H1, H2, par&#225;grafos curtos. Tom informativo e profissional..." style="height:220px;font-size:13px;resize:none">{_ip_site_esc}</textarea>
+                        <div style="margin-top:8px;font-size:11px;color:var(--muted)">Dica: inclua tom, formato (HTML/texto), comprimento e palavras-chave alvo.</div>
+                      </div>
+                      <!-- Facebook prompt -->
+                      <div class="card" style="padding:20px;border-top:3px solid #1877f2;display:flex;flex-direction:column;height:100%;box-sizing:border-box;margin-top:0">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                          <div style="width:36px;height:36px;border-radius:9px;background:#1877f2;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0">
+                            {_fb_icon_ia}
+                          </div>
+                          <div>
+                            <div style="font-weight:700;font-size:14px">Facebook</div>
+                            <div style="font-size:11px;color:var(--muted)">Prompt para posts sociais</div>
+                          </div>
+                          {_ip_fb_status}
+                        </div>
+                        <textarea name="facebook_prompt" placeholder="Ex: Crie um post curto e envolvente. Use 2-3 par&#225;grafos, emojis relevantes, termine com uma pergunta para engajar..." style="height:220px;font-size:13px;resize:none">{_ip_fb_esc}</textarea>
+                        <div style="margin-top:8px;font-size:11px;color:var(--muted)">Dica: posts curtos funcionam melhor. Use emojis e chamadas para a&#231;&#227;o.</div>
+                      </div>
+                    </div>
+                    <div style="display:flex;justify-content:flex-end">
+                      <button class="btn flat" type="submit" style="padding:10px 26px;font-size:14px;gap:7px">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                        Salvar prompts
+                      </button>
+                    </div>
+                  </form>
                 </div>
-              </form>
+              </details>
             </div>
-          </details>
-        </div>
-
-        <div class="card" style="margin-bottom:14px">
-          <details class="toggle-section" open>
-            <summary>
-              <span class="ts-title">
-                <span style="width:22px;height:22px;border-radius:6px;background:rgba(245,158,11,.15);display:inline-flex;align-items:center;justify-content:center;font-size:12px">⏳</span>
-                Pendentes / Processando <span class="ts-badge" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">{n_pending}</span>
-              </span>
-              <span class="ts-arrow">▶</span>
-            </summary>
-            <div class="ts-body">
-              <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-                <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-pending-table tbody')">Limpar lista</button>
-              </div>
-              <form method="post" action="/app/profiles/{p.id}/posts/bulk">
-                {_posts_table("posts-pending-table", pending_rows, "Nenhum post pendente.")}
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-                  <button class="btn secondary" type="submit" name="mode" value="cancel" style="font-size:12px">Cancelar selecionados</button>
-                  <button class="btn secondary" type="submit" name="mode" value="delete" style="font-size:12px">Excluir selecionados</button>
-                </div>
-              </form>
-            </div>
-          </details>
-        </div>
-
-        <div class="card">
-          <details class="toggle-section" open>
-            <summary>
-              <span class="ts-title">
-                <span style="width:22px;height:22px;border-radius:6px;background:rgba(239,68,68,.15);display:inline-flex;align-items:center;justify-content:center;font-size:12px">✕</span>
-                Falhas <span class="ts-badge" style="color:#ef4444;border-color:rgba(239,68,68,.3)">{n_failed}</span>
-              </span>
-              <span class="ts-arrow">▶</span>
-            </summary>
-            <div class="ts-body">
-              <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-                <button class="btn secondary" style="font-size:12px;padding:5px 12px" type="button" onclick="clearBox('#posts-failed-table tbody')">Limpar lista</button>
-              </div>
-              <form method="post" action="/app/profiles/{p.id}/posts/bulk">
-                {_posts_table("posts-failed-table", failed_rows, "Nenhuma falha registrada.")}
-              </form>
-            </div>
-          </details>
-        </div>
-        """
-
+            """
     return _layout(dict(tabs).get(tab, "Configurar"), body, user=user, profile_id=p.id, active_tab=tab)
 
 
@@ -3342,6 +4117,7 @@ def profile_schedule_save(
     interval_minutes: str = Form("0"),
     start_at: str = Form(""),
     respect_schedule: str = Form("0"),
+    next_tab: str = Form("agendamento"),
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -3376,7 +4152,8 @@ def profile_schedule_save(
     p.schedule_config_json = cfg
     db.add(p)
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}?tab=agendamento", status_code=status.HTTP_302_FOUND)
+    _safe_next = next_tab if next_tab in ("agendamento", "publicacao") else "agendamento"
+    return RedirectResponse(f"/app/profiles/{p.id}?tab={_safe_next}&msg={quote_plus('Cadência salva.')}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/ai-prompts", include_in_schema=False)
@@ -3494,6 +4271,42 @@ def _get_wordpress_creds_for_profile(db, *, profile_id: str, user_id: str) -> di
     return {"base_url": base_url, "username": username, "app_password": app_password}
 
 
+@router.post("/app/profiles/{profile_id}/posts/{post_id}/correct", include_in_schema=False)
+def profile_post_correct(profile_id: str, post_id: str, user: User = Depends(get_current_user), db=Depends(get_db)):
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    post = db.scalar(select(Post).where(Post.profile_id == p.id, Post.id == post_id))
+    if not post:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if post.status != PostStatus.completed:
+        return RedirectResponse("/app/posts?msg=Somente+posts+publicados+podem+ser+corrigidos.", status_code=status.HTTP_302_FOUND)
+    active_job = db.scalar(
+        select(Job.id)
+        .where(Job.post_id == post.id, Job.status.in_([JobStatus.queued, JobStatus.running]))
+        .limit(1)
+    )
+    if active_job:
+        return RedirectResponse("/app/posts?msg=Este+post+j%C3%A1+est%C3%A1+em+corre%C3%A7%C3%A3o.", status_code=status.HTTP_302_FOUND)
+    outputs = dict(post.outputs_json or {})
+    outputs.pop("recipe", None)
+    outputs["correction_requested"] = True
+    post.outputs_json = outputs
+    post.status = PostStatus.processing
+    post.updated_at = datetime.utcnow()
+    db.add(post)
+    enqueue_job(
+        db,
+        user_id=post.user_id,
+        profile_id=post.profile_id,
+        post_id=post.id,
+        job_type=JOB_AI,
+        payload={"collected_content_id": post.collected_content_id},
+    )
+    db.commit()
+    return RedirectResponse("/app/posts?msg=Corre%C3%A7%C3%A3o+reagendada.", status_code=status.HTTP_302_FOUND)
+
+
 @router.post("/app/profiles/{profile_id}/posts/bulk", include_in_schema=False)
 def profile_posts_bulk(
     profile_id: str,
@@ -3507,16 +4320,16 @@ def profile_posts_bulk(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     ids = [str(x) for x in (post_id or []) if str(x).strip()]
     if not ids:
-        return RedirectResponse(f"/app/profiles/{p.id}?tab=posts", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
     if mode == "cancel":
         _cancel_posts(db, profile_id=p.id, post_ids=ids, user=user)
         db.commit()
-        return RedirectResponse(f"/app/profiles/{p.id}?tab=posts", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
     if mode == "delete_wp":
         try:
             creds = _get_wordpress_creds_for_profile(db, profile_id=p.id, user_id=user.id)
         except WordPressError as e:
-            return RedirectResponse(f"/app/profiles/{p.id}?tab=posts&msg={quote_plus(str(e))}", status_code=status.HTTP_302_FOUND)
+            return RedirectResponse(f"/app/posts?msg={quote_plus(str(e))}", status_code=status.HTTP_302_FOUND)
         posts = list(db.scalars(select(Post).where(Post.profile_id == p.id, Post.id.in_(ids))))
         ok_ids: list[str] = []
         failed = 0
@@ -3540,10 +4353,10 @@ def profile_posts_bulk(
             _delete_posts(db, profile_id=p.id, post_ids=ok_ids)
         db.commit()
         msg = f"Apagados do site: {len(ok_ids)} • Falhas: {failed} • Ignorados: {skipped}"
-        return RedirectResponse(f"/app/profiles/{p.id}?tab=posts&msg={quote_plus(msg)}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(f"/app/posts?msg={quote_plus(msg)}", status_code=status.HTTP_302_FOUND)
     _delete_posts(db, profile_id=p.id, post_ids=ids)
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}?tab=posts", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/posts/cancel-all", include_in_schema=False)
@@ -3554,9 +4367,11 @@ def profile_posts_cancel_all(profile_id: str, user: User = Depends(get_current_u
     ids = list(
         db.scalars(select(Post.id).where(Post.profile_id == p.id, Post.status.in_([PostStatus.pending, PostStatus.processing])))
     )
+    if not ids:
+        return RedirectResponse("/app/posts?msg=Nenhum+post+pendente+para+cancelar.", status_code=status.HTTP_302_FOUND)
     _cancel_posts(db, profile_id=p.id, post_ids=[str(x) for x in ids], user=user)
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}?tab=posts", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/posts/delete-completed", include_in_schema=False)
@@ -3565,9 +4380,24 @@ def profile_posts_delete_completed(profile_id: str, user: User = Depends(get_cur
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     ids = list(db.scalars(select(Post.id).where(Post.profile_id == p.id, Post.status == PostStatus.completed)))
+    if not ids:
+        return RedirectResponse("/app/posts?msg=Nenhum+post+publicado+para+apagar.", status_code=status.HTTP_302_FOUND)
     _delete_posts(db, profile_id=p.id, post_ids=[str(x) for x in ids])
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}?tab=posts", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/app/profiles/{profile_id}/posts/delete-failed", include_in_schema=False)
+def profile_posts_delete_failed(profile_id: str, user: User = Depends(get_current_user), db=Depends(get_db)):
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    ids = list(db.scalars(select(Post.id).where(Post.profile_id == p.id, Post.status == PostStatus.failed)))
+    if not ids:
+        return RedirectResponse("/app/posts?msg=Nenhuma+falha+para+excluir.", status_code=status.HTTP_302_FOUND)
+    _delete_posts(db, profile_id=p.id, post_ids=[str(x) for x in ids])
+    db.commit()
+    return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/sources/create", include_in_schema=False)
@@ -3596,7 +4426,7 @@ def source_delete(profile_id: str, source_id: str, user: User = Depends(get_curr
     if s:
         db.delete(s)
         db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=fontes", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/run", include_in_schema=False)
@@ -3764,7 +4594,43 @@ def profile_wp_remove_user(
         creds["active_username"] = users[0]["username"] if users else ""
     integ.credentials_encrypted = encrypt_json(creds)
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}?tab=integracoes&msg={quote_plus('Usuário removido.')}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=integracoes&itab=wordpress&msg={quote_plus('Usuário removido.')}", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/app/profiles/{profile_id}/integrations/wordpress/edit-user", include_in_schema=False)
+def profile_wp_edit_user(
+    profile_id: str,
+    old_username: str = Form(...),
+    new_username: str = Form(...),
+    new_app_password: str = Form(""),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    integ = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.WORDPRESS))
+    if not integ:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        creds = decrypt_json(integ.credentials_encrypted)
+    except CryptoError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+    old = old_username.strip()
+    new_u = new_username.strip()
+    new_p = new_app_password.strip()
+    users = creds.get("users") or []
+    for u_entry in users:
+        if u_entry.get("username") == old:
+            u_entry["username"] = new_u
+            if new_p:
+                u_entry["app_password"] = new_p
+    if creds.get("active_username") == old:
+        creds["active_username"] = new_u
+    creds["users"] = users
+    integ.credentials_encrypted = encrypt_json(creds)
+    db.commit()
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=integracoes&itab=wordpress&msg={quote_plus('Usuário atualizado.')}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/integrations/gemini", include_in_schema=False)
@@ -3990,29 +4856,18 @@ def integrations_wordpress(
 
 
 @router.get("/app/posts", include_in_schema=False)
-def posts_page(user: User = Depends(get_current_user), db=Depends(get_db)):
+def posts_page(request: Request, user: User = Depends(get_current_user), db=Depends(get_db)):
     all_profiles = list(db.scalars(
         select(AutomationProfile)
         .where(AutomationProfile.user_id == user.id)
         .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
     ))
 
-    # ── Status pill helper ──────────────────────────────────────────────────
-    _status_cfg = {
-        "completed":  ("#10b981", "rgba(16,185,129,.12)",  "✓ Publicado"),
-        "pending":    ("#f59e0b", "rgba(245,158,11,.12)",  "⏳ Pendente"),
-        "processing": ("#6366f1", "rgba(99,102,241,.12)",  "⚡ Processando"),
-        "failed":     ("#ef4444", "rgba(239,68,68,.12)",   "✕ Falhou"),
-        "cancelled":  ("#6b7280", "rgba(107,114,128,.12)", "— Cancelado"),
-    }
-    def _status_pill(s):
-        color, bg, label = _status_cfg.get(s, ("#6b7280", "rgba(107,114,128,.12)", s))
-        return f"<span style='display:inline-flex;align-items:center;font-size:11px;font-weight:600;color:{color};background:{bg};border-radius:20px;padding:3px 10px;white-space:nowrap'>{label}</span>"
-
     # ── Global totals ────────────────────────────────────────────────────────
-    total_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_([p.id for p in all_profiles]), Post.status == PostStatus.completed)) or 0)
-    total_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_([p.id for p in all_profiles]), Post.status == PostStatus.pending)) or 0)
-    total_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_([p.id for p in all_profiles]), Post.status == PostStatus.failed)) or 0)
+    all_ids = [p.id for p in all_profiles]
+    total_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status == PostStatus.completed)) or 0) if all_ids else 0
+    total_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0) if all_ids else 0
+    total_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status == PostStatus.failed)) or 0) if all_ids else 0
 
     # ── Summary bar ─────────────────────────────────────────────────────────
     summary_bar = f"""
@@ -4035,97 +4890,375 @@ def posts_page(user: User = Depends(get_current_user), db=Depends(get_db)):
       </div>
     </div>"""
 
+    # ── Flash message ────────────────────────────────────────────────────────
+    flash_msg = (request.query_params.get("msg") or "").strip()
+    flash_html = f"<div class='card' style='border-color:rgba(99,102,241,.4);margin-bottom:14px'><b>{html.escape(flash_msg)}</b></div>" if flash_msg else ""
+    now_utc = datetime.utcnow()
+    help_menu = """
+    <details class="card toggle-section" style="margin-bottom:14px;padding:0;overflow:hidden">
+      <summary style="padding:14px 18px">
+        <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+          <span style="width:24px;height:24px;border-radius:6px;background:rgba(99,102,241,.12);display:inline-flex;align-items:center;justify-content:center">&#8505;</span>
+          Ajuda do menu Posts
+        </span>
+        <span class="ts-arrow">&#9658;</span>
+      </summary>
+      <div class="ts-body" style="padding:0 18px 16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;font-size:12px;color:var(--muted);line-height:1.55">
+          <div><b style="color:var(--text)">Abrir bot</b><br>O cabeçalho de cada bot é um toggle. Clique nele para mostrar ou ocultar as ações e listas.</div>
+          <div><b style="color:var(--text)">Rodar agora</b><br>Libera jobs pendentes/agendados. Fica desativado quando não existe fila para rodar.</div>
+          <div><b style="color:var(--text)">Reprocessar IA</b><br>Reagenda posts com falha para a IA tentar novamente. Só ativa quando há falhas.</div>
+          <div><b style="color:var(--text)">Cancelar pendentes</b><br>Cancela posts pendentes ou em processamento do bot. Só ativa quando há pendências.</div>
+          <div><b style="color:var(--text)">Apagar publicados</b><br>Remove publicados do PostHub. Use “Apagar do WordPress” para remover também do site.</div>
+          <div><b style="color:var(--text)">Corrigir</b><br>Reprocessa o texto de um post publicado e atualiza o artigo existente no WordPress.</div>
+          <div><b style="color:var(--text)">Logs</b><br>Fica oculto por padrão. Abra apenas quando quiser acompanhar etapas e erros.</div>
+        </div>
+      </div>
+    </details>
+    """
+
+    # ── Table helper ─────────────────────────────────────────────────────────
+    def _ptable(tid, rows, empty_msg, last_col="Link", extra_col: str | None = None):
+        thead = (
+            "<tr style='background:var(--surface2)'>"
+            "<th style='padding:10px 14px;width:36px'><input type='checkbox' style='width:14px;height:14px;cursor:pointer' onclick=\"var _h=this;var _t=document.getElementById('" + tid + "');_t.querySelectorAll('tbody input[name=post_id]').forEach(function(c){c.checked=_h.checked;});_phUpdateCount('" + tid + "');\"></th>"
+            "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>T\u00edtulo</th>"
+            "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Status</th>"
+            "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Quando</th>"
+            f"<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>{html.escape(last_col)}</th>"
+            + (f"<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>{html.escape(extra_col)}</th>" if extra_col else "")
+            + "</tr>"
+        )
+        colspan = 6 if extra_col else 5
+        body_rows = rows or f"<tr><td colspan='{colspan}' style='padding:20px;text-align:center;color:var(--muted);font-size:13px'>{empty_msg}</td></tr>"
+        # Add onchange to each checkbox in the rows
+        if rows:
+            body_rows = body_rows.replace(
+                "name='post_id'",
+                f"name='post_id' onchange=\"_phUpdateCount('{tid}')\""
+            )
+        return (f"<div style='border:1px solid var(--border);border-radius:12px;overflow:hidden'>"
+                f"<table id='{tid}' style='width:100%;border-collapse:collapse'>"
+                f"<thead>{thead}</thead><tbody>{body_rows}</tbody></table></div>"
+                f"<div id='cnt-{tid}' style='font-size:11px;color:var(--muted);margin-top:5px;min-height:16px'></div>")
+
     # ── Per-bot sections ─────────────────────────────────────────────────────
     bot_sections = ""
     for pr in all_profiles:
-        pr_emoji = (pr.publish_config_json or {}).get("emoji") or "🤖"
+        pr_emoji = _safe((pr.publish_config_json or {}).get("emoji") or "🤖")
         pr_name  = html.escape(pr.name)
+        pr_id    = html.escape(pr.id)
 
-        # WP URL
+        # WP domain
         wp_url = ""
         wp_integ = db.scalar(select(Integration).where(Integration.profile_id == pr.id, Integration.type == IntegrationType.WORDPRESS))
         if wp_integ:
             try:
-                creds = decrypt_json(wp_integ.credentials_encrypted)
-                wp_url = (creds.get("base_url") or "") if isinstance(creds, dict) else ""
+                creds_d = decrypt_json(wp_integ.credentials_encrypted)
+                wp_url = (creds_d.get("base_url") or "") if isinstance(creds_d, dict) else ""
             except Exception:
                 pass
         wp_domain = wp_url.replace("https://","").replace("http://","").rstrip("/") if wp_url else ""
 
         # counts
         c_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.completed)) or 0)
-        c_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.pending)) or 0)
+        c_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
         c_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.failed)) or 0)
-        c_proc = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.processing)) or 0)
+        _b_qd = int(db.scalar(select(func.count()).select_from(Job).where(
+            Job.profile_id == pr.id, Job.status == JobStatus.queued)) or 0)
+        _b_rj = int(db.scalar(select(func.count()).select_from(Job).where(
+            Job.profile_id == pr.id, Job.status == JobStatus.running)) or 0)
 
-        # recent posts (all statuses)
-        posts = list(db.execute(
-            select(Post, CollectedContent.title)
-            .join(CollectedContent, CollectedContent.id == Post.collected_content_id)
-            .where(Post.profile_id == pr.id)
-            .order_by(Post.published_at.desc().nullslast(), Post.created_at.desc())
-            .limit(25)
-        ).all())
+        # load posts per category
+        def _load(statuses, limit=200):
+            return list(db.execute(
+                select(Post, CollectedContent.title)
+                .join(CollectedContent, CollectedContent.id == Post.collected_content_id)
+                .where(Post.profile_id == pr.id, Post.status.in_(statuses))
+                .order_by(Post.published_at.desc().nullslast(), Post.created_at.desc())
+                .limit(limit)
+            ).all())
 
-        if not posts:
-            table_html = f"<div style='padding:24px;text-align:center;color:var(--muted);font-size:13px'>Nenhum post ainda — <a href='/app/robot' style='color:var(--primary)'>iniciar o robô</a> para começar.</div>"
-        else:
-            rows_html = ""
-            for p, title in posts:
-                t = html.escape(str(title or "")[:80] + ("…" if len(str(title or "")) > 80 else ""))
-                dt = html.escape(_fmt_dt(p.published_at or p.created_at, user=user))
-                link = ""
-                if p.wp_url:
-                    domain = html.escape(p.wp_url.split("/")[-1][:40] if "/" in p.wp_url else p.wp_url[:40])
-                    link = f"<a href='{html.escape(p.wp_url)}' target='_blank' rel='noopener' style='color:var(--primary);font-size:12px;display:inline-flex;align-items:center;gap:4px'>&#8599; Ver</a>"
-                rows_html += f"<tr><td style='max-width:320px'><div style='font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px'>{t}</div></td><td>{_status_pill(p.status.value)}</td><td style='font-size:12px;color:var(--muted);white-space:nowrap'>{dt}</td><td style='white-space:nowrap'>{link}</td></tr>"
-            table_html = f"""<div style='overflow-x:auto'>
-              <table style='width:100%;border-collapse:collapse'>
-                <thead><tr>
-                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Título</th>
-                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Status</th>
-                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Data</th>
-                  <th style='padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600'>Link</th>
-                </tr></thead>
-                <tbody>{rows_html}</tbody>
-              </table></div>"""
+        pub_posts   = _load([PostStatus.completed])
+        pend_posts  = _load([PostStatus.pending, PostStatus.processing])
+        fail_posts  = _load([PostStatus.failed])
 
-        # status indicator
+        def _pending_timer_html(p_obj: Post) -> str:
+            stage_labels = {
+                JOB_COLLECT: "coleta",
+                JOB_CLEAN: "limpeza",
+                JOB_AI: "IA",
+                JOB_MEDIA: "mídia",
+                JOB_PUBLISH_WP: "publicação",
+            }
+            running_job = db.scalar(
+                select(Job)
+                .where(Job.post_id == p_obj.id, Job.status == JobStatus.running)
+                .order_by(Job.updated_at.desc())
+                .limit(1)
+            )
+            if running_job:
+                stage = html.escape(stage_labels.get(running_job.type, running_job.type))
+                return (
+                    "<span style='display:inline-flex;align-items:center;gap:6px;color:#6366f1;font-size:11px;font-weight:700;"
+                    "background:rgba(99,102,241,.12);padding:3px 8px;border-radius:20px;white-space:nowrap'>"
+                    f"<span class='dot-pulse'></span>{stage} agora</span>"
+                )
+            queued_job = db.scalar(
+                select(Job)
+                .where(Job.post_id == p_obj.id, Job.status == JobStatus.queued)
+                .order_by(Job.run_at.asc())
+                .limit(1)
+            )
+            if queued_job:
+                stage = html.escape(stage_labels.get(queued_job.type, queued_job.type))
+                run_at = queued_job.run_at or now_utc
+                if run_at <= now_utc:
+                    return (
+                        "<span style='display:inline-flex;align-items:center;gap:6px;color:#10b981;font-size:11px;font-weight:700;"
+                        "background:rgba(16,185,129,.10);padding:3px 8px;border-radius:20px;white-space:nowrap'>"
+                        f"{stage}: agora</span>"
+                    )
+                target_ms = int(run_at.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                return (
+                    "<span style='display:inline-flex;flex-direction:column;gap:1px;color:var(--text);font-size:11px;white-space:nowrap'>"
+                    f"<span style='color:#f59e0b;font-weight:700'>Próxima: {stage}</span>"
+                    f"<span>em <b data-ph-countdown-target='{target_ms}'>--:--</b></span>"
+                    "</span>"
+                )
+            if p_obj.status == PostStatus.processing:
+                return "<span style='font-size:11px;color:var(--muted);white-space:nowrap'>Finalizando...</span>"
+            return "<span style='font-size:11px;color:var(--muted);white-space:nowrap'>Aguardando fila</span>"
+
+        def _build_pub_rows(items):
+            out = ""
+            for p_obj, title in items:
+                t = html.escape(str(title or "")[:80] + ("\u2026" if len(str(title or "")) > 80 else ""))
+                dt = html.escape(_fmt_dt(p_obj.published_at or p_obj.created_at, user=user))
+                chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer'/>"
+                wp_link = (f"<a href='{html.escape(p_obj.wp_url)}' target='_blank' rel='noopener' "
+                           f"style='display:inline-flex;align-items:center;gap:4px;color:#10b981;font-size:12px;font-weight:600;text-decoration:none'>"
+                           f"&#8599; Ver</a>") if p_obj.wp_url else "<span style='color:var(--muted);font-size:12px'>\u2014</span>"
+                correct_btn = (
+                    f"<form method='post' action='/app/profiles/{pr_id}/posts/{html.escape(p_obj.id)}/correct' style='margin:0'>"
+                    f"<button class='btn flat' type='submit' style='font-size:11px;padding:4px 10px;color:#f59e0b;border-color:rgba(245,158,11,.35);background:transparent' "
+                    f"onclick=\"return confirm('Reprocessar o texto deste post e atualizar no WordPress?')\">Corrigir</button></form>"
+                )
+                out += (f"<tr style='border-top:1px solid rgba(16,185,129,.12);border-left:3px solid #10b981;background:rgba(16,185,129,.03)'>"
+                        f"<td style='padding:10px 14px;width:36px'>{chk}</td>"
+                        f"<td style='padding:10px 14px'><div style='display:flex;align-items:center;gap:8px'>"
+                        f"<span style='width:20px;height:20px;border-radius:50%;background:#10b981;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;color:#fff'>✓</span>"
+                        f"<span style='font-size:13px;font-weight:500;color:var(--text)'>{t}</span></div></td>"
+                        f"<td style='padding:10px 14px'><span style='color:#10b981;font-size:11px;font-weight:700;background:rgba(16,185,129,.12);padding:3px 8px;border-radius:20px'>✓ Publicado</span></td>"
+                        f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{dt}</td>"
+                        f"<td style='padding:10px 14px'>{wp_link}</td>"
+                        f"<td style='padding:10px 14px'>{correct_btn}</td></tr>")
+            return out
+
+        def _build_pend_rows(items):
+            out = ""
+            for p_obj, title in items:
+                t = html.escape(str(title or "")[:80] + ("\u2026" if len(str(title or "")) > 80 else ""))
+                dt = html.escape(_fmt_dt(p_obj.created_at, user=user))
+                chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer'/>"
+                is_proc = p_obj.status == PostStatus.processing
+                badge_color = "#6366f1" if is_proc else "#f59e0b"
+                badge_bg = "rgba(99,102,241,.12)" if is_proc else "rgba(245,158,11,.12)"
+                badge_lbl = "\u26a1 Processando" if is_proc else "\u23f3 Pendente"
+                timer_html = _pending_timer_html(p_obj)
+                out += (f"<tr style='border-top:1px solid var(--border)'>"
+                        f"<td style='padding:10px 14px;width:36px'>{chk}</td>"
+                        f"<td style='padding:10px 14px;font-size:13px;color:var(--text)'>{t}</td>"
+                        f"<td style='padding:10px 14px'><span style='color:{badge_color};font-size:11px;font-weight:700;background:{badge_bg};padding:3px 8px;border-radius:20px'>{badge_lbl}</span></td>"
+                        f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{dt}</td>"
+                        f"<td style='padding:10px 14px;font-size:12px;color:var(--muted)'>{timer_html}</td></tr>")
+            return out
+
+        def _build_fail_rows(items):
+            out = ""
+            for p_obj, title in items:
+                t = html.escape(str(title or "")[:80] + ("\u2026" if len(str(title or "")) > 80 else ""))
+                dt = html.escape(_fmt_dt(p_obj.created_at, user=user))
+                chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer'/>"
+                is_canceled = isinstance(p_obj.outputs_json, dict) and bool(p_obj.outputs_json.get("canceled_by_user"))
+                err_msg = ""
+                if isinstance(p_obj.outputs_json, dict):
+                    err_msg = str(p_obj.outputs_json.get("error") or "")[:80]
+                badge_lbl = "Cancelado" if is_canceled else "Erro"
+                err_div = f"<div style='font-size:11px;color:#ef4444;margin-top:3px;padding-left:28px'>{html.escape(err_msg)}</div>" if err_msg else ""
+                out += (f"<tr style='border-top:1px solid rgba(239,68,68,.12);border-left:3px solid #ef4444;background:rgba(239,68,68,.03)'>"
+                        f"<td style='padding:10px 14px;width:36px'>{chk}</td>"
+                        f"<td style='padding:10px 14px'><div>"
+                        f"<div style='display:flex;align-items:center;gap:8px'>"
+                        f"<span style='width:20px;height:20px;border-radius:50%;background:#ef4444;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;color:#fff'>\u00d7</span>"
+                        f"<span style='font-size:13px;font-weight:500;color:var(--text)'>{t}</span></div>{err_div}</div></td>"
+                        f"<td style='padding:10px 14px'><span style='color:#ef4444;font-size:11px;font-weight:700;background:rgba(239,68,68,.12);padding:3px 8px;border-radius:20px'>{badge_lbl}</span></td>"
+                        f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{dt}</td>"
+                        f"<td style='padding:10px 14px;font-size:12px;color:var(--muted)'>\u2014</td></tr>")
+            return out
+
+        pub_rows  = _build_pub_rows(pub_posts)
+        pend_rows = _build_pend_rows(pend_posts)
+        fail_rows = _build_fail_rows(fail_posts)
+
+        # bot header
         if pr.active:
             status_badge = "<span style='display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);border-radius:20px;padding:2px 10px'><span class='dot-pulse'></span>Online</span>"
         else:
             status_badge = "<span style='font-size:11px;font-weight:600;color:var(--muted);background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:2px 10px'>Inativo</span>"
 
         icon_bg = "linear-gradient(135deg,#10b981,#059669)" if pr.active else "linear-gradient(135deg,var(--primary),var(--pink))"
+        proc_badge = (f'<span style="display:flex;flex-direction:column;align-items:center;gap:1px">'
+                      f'<span style="font-size:15px;font-weight:800;color:#6366f1">{c_pend}</span>'
+                      f'<span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pend.</span></span>') if True else ""
+        can_run_now = _b_qd > 0
+        can_retry_ai = c_fail > 0
+        can_cancel_pending = c_pend > 0
+        can_delete_completed = c_pub > 0
+        run_disabled = "" if can_run_now else "disabled"
+        retry_disabled = "" if can_retry_ai else "disabled"
+        cancel_disabled = "" if can_cancel_pending else "disabled"
+        del_completed_disabled = "" if can_delete_completed else "disabled"
+        run_style = "" if can_run_now else "opacity:.45;cursor:not-allowed;"
+        retry_style = "" if can_retry_ai else "opacity:.45;cursor:not-allowed;"
+        cancel_style = "" if can_cancel_pending else "opacity:.45;cursor:not-allowed;"
+        del_completed_style = "" if can_delete_completed else "opacity:.45;cursor:not-allowed;"
+        pub_action_disabled = "" if pub_posts else "disabled"
+        pend_action_disabled = "" if pend_posts else "disabled"
+        fail_action_disabled = "" if fail_posts else "disabled"
+        pub_action_style = "" if pub_posts else "opacity:.45;cursor:not-allowed;"
+        pend_action_style = "" if pend_posts else "opacity:.45;cursor:not-allowed;"
+        fail_action_style = "" if fail_posts else "opacity:.45;cursor:not-allowed;"
 
-        bot_sections += f"""
-    <div class="card" style="margin-bottom:14px">
-      <details class="toggle-section" open>
-        <summary>
-          <span class="ts-title" style="display:flex;align-items:center;gap:10px">
-            <div style="width:34px;height:34px;border-radius:9px;background:{icon_bg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{pr_emoji}</div>
-            <div>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <span style="font-weight:700">{pr_name}</span>
-                {status_badge}
-              </div>
-              {f'<div style="font-size:11px;color:var(--muted);margin-top:2px">{html.escape(wp_domain)}</div>' if wp_domain else ''}
+        bot_sections += _ph(f"bot-section-{pr_id}") + f"""
+    <details class="card toggle-section" open style="margin-bottom:20px;padding:0;overflow:hidden">
+      <summary style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:40px;height:40px;border-radius:10px;background:{icon_bg};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">{pr_emoji}</div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-weight:700;font-size:15px">{pr_name}</span>
+              {status_badge}
             </div>
-          </span>
-          <span style="display:flex;align-items:center;gap:16px;margin-right:8px;flex-wrap:wrap">
-            <span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#10b981">{c_pub}</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Public.</span></span>
-            <span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#f59e0b">{c_pend}</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pend.</span></span>
-            {'<span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#6366f1">' + str(c_proc) + '</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Proc.</span></span>' if c_proc > 0 else ''}
-            <span style="display:flex;flex-direction:column;align-items:center;gap:1px"><span style="font-size:15px;font-weight:800;color:#ef4444">{c_fail}</span><span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Falhas</span></span>
-            <span class="ts-arrow">▶</span>
-          </span>
-        </summary>
-        <div class="ts-body" style="padding-top:4px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-            <span style="font-size:12px;color:var(--muted)">Últimos {len(posts)} posts de todos os status</span>
-            <a href="/app/profiles/{pr.id}?tab=posts" class="btn secondary" style="font-size:12px;padding:5px 12px">Ver todos ↗</a>
+            {f'<div style="font-size:11px;color:var(--muted);margin-top:2px">{html.escape(wp_domain)}</div>' if wp_domain else ''}
           </div>
-          {table_html}
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <div style="display:flex;gap:12px">
+            <div style="text-align:center"><div style="font-size:17px;font-weight:800;color:#10b981">{c_pub}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Publicados</div></div>
+            <div style="text-align:center"><div style="font-size:17px;font-weight:800;color:#f59e0b">{c_pend}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pendentes</div></div>
+            <div style="text-align:center"><div style="font-size:17px;font-weight:800;color:#ef4444">{c_fail}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Falhas</div></div>
+          </div>
+          <span class="ts-arrow">&#9658;</span>
+        </div>
+      </summary>
+      <div style="border-top:1px solid var(--border)">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--surface2)">
+            <form method="post" action="/app/robot/run-now" style="margin:0">
+              <input type="hidden" name="bot_id" value="{pr_id}">
+              <button class="btn secondary" type="submit" {run_disabled} title="Libera jobs pendentes/agendados deste bot" style="font-size:11px;padding:5px 10px;{run_style}">&#9654; Rodar agora</button>
+            </form>
+            <form method="post" action="/app/robot/retry-ai" style="margin:0">
+              <input type="hidden" name="bot_id" value="{pr_id}">
+              <button class="btn secondary" type="submit" {retry_disabled} title="Reprocessa posts com falha" style="font-size:11px;padding:5px 10px;{retry_style}">&#8634; Reprocessar IA ({c_fail})</button>
+            </form>
+            <form method="post" action="/app/profiles/{pr_id}/posts/cancel-all" style="margin:0">
+              <button class="btn secondary" type="submit" {cancel_disabled} style="font-size:11px;padding:5px 10px;{cancel_style}" title="Cancelar todos os posts pendentes deste bot">Cancelar pendentes</button>
+            </form>
+            <form method="post" action="/app/profiles/{pr_id}/posts/delete-completed" style="margin:0">
+              <button class="btn secondary" type="submit" {del_completed_disabled} style="font-size:11px;padding:5px 10px;{del_completed_style}" title="Apagar todos os publicados deste bot do PostHub">Apagar publicados</button>
+            </form>
+        </div>
+      <!-- Publicados -->
+      <details class="toggle-section" {'open' if pub_posts else ''}>
+        <summary style="padding:12px 20px;border-bottom:1px solid var(--border)">
+          <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+            <span style="width:22px;height:22px;border-radius:6px;background:rgba(16,185,129,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">✓</span>
+            Publicados
+            <span class="ts-badge" style="color:#10b981;border-color:rgba(16,185,129,.3)">{c_pub}</span>
+          </span>
+          <span class="ts-arrow">▶</span>
+        </summary>
+        <div class="ts-body" style="padding:14px 20px">
+          <form method="post" action="/app/profiles/{pr_id}/posts/bulk">
+            {_ptable(f"tbl-pub-{pr_id}", pub_rows, "Nenhum post publicado ainda.", "Link", "Corrigir")}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+              <button class="btn secondary" type="submit" name="mode" value="delete" {pub_action_disabled} style="font-size:12px;padding:5px 12px;{pub_action_style}">Excluir selecionados (PostHub)</button>
+              <button class="btn flat" type="submit" name="mode" value="delete_wp" {pub_action_disabled} style="font-size:12px;padding:5px 12px;color:#ef4444;border-color:rgba(239,68,68,.45);background:transparent;{pub_action_style}"
+                onclick="return confirm('Apagar do WordPress? Esta a\u00e7\u00e3o n\u00e3o pode ser desfeita.')">&#128465; Apagar do WordPress</button>
+            </div>
+          </form>
+        </div>
+      </details>
+      <!-- Pendentes -->
+      <details class="toggle-section" {'open' if pend_posts else ''} style="border-top:1px solid var(--border)">
+        <summary style="padding:12px 20px;border-bottom:1px solid var(--border)">
+          <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+            <span style="width:22px;height:22px;border-radius:6px;background:rgba(245,158,11,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">⏳</span>
+            Pendentes / Processando
+            <span class="ts-badge" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">{c_pend}</span>
+          </span>
+          <span class="ts-arrow">▶</span>
+        </summary>
+        <div class="ts-body" style="padding:14px 20px">
+          <form method="post" action="/app/profiles/{pr_id}/posts/bulk">
+            {_ptable(f"tbl-pend-{pr_id}", pend_rows, "Nenhum post pendente.", "Tempo")}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+              <button class="btn secondary" type="submit" name="mode" value="cancel" {pend_action_disabled} style="font-size:12px;padding:5px 12px;{pend_action_style}">Cancelar selecionados</button>
+              <button class="btn secondary" type="submit" name="mode" value="delete" {pend_action_disabled} style="font-size:12px;padding:5px 12px;{pend_action_style}">Excluir selecionados</button>
+            </div>
+          </form>
+          <form method="post" action="/app/profiles/{pr_id}/posts/cancel-all" style="margin-top:6px">
+            <button class="btn flat" type="submit" {pend_action_disabled} style="font-size:11px;padding:4px 10px;color:#ef4444;border-color:rgba(239,68,68,.3);{pend_action_style}" onclick="return confirm('Cancelar todos os pendentes?')">&#128465; Cancelar todos pendentes</button>
+          </form>
+        </div>
+      </details>
+      <!-- Falhas -->
+      <details class="toggle-section" {'open' if fail_posts else ''} style="border-top:1px solid var(--border)">
+        <summary style="padding:12px 20px">
+          <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+            <span style="width:22px;height:22px;border-radius:6px;background:rgba(239,68,68,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">✕</span>
+            Falhas
+            <span class="ts-badge" style="color:#ef4444;border-color:rgba(239,68,68,.3)">{c_fail}</span>
+          </span>
+          <span class="ts-arrow">▶</span>
+        </summary>
+        <div class="ts-body" style="padding:14px 20px">
+          <form method="post" action="/app/profiles/{pr_id}/posts/bulk">
+            {_ptable(f"tbl-fail-{pr_id}", fail_rows, "Nenhuma falha registrada.")}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+              <button class="btn secondary" type="submit" name="mode" value="delete" {fail_action_disabled} style="font-size:12px;padding:5px 12px;{fail_action_style}">Excluir selecionados</button>
+            </div>
+          </form>
+          <form method="post" action="/app/profiles/{pr_id}/posts/delete-failed" style="margin-top:6px">
+            <button class="btn flat" type="submit" {fail_action_disabled} style="font-size:11px;padding:4px 10px;color:#ef4444;border-color:rgba(239,68,68,.3);{fail_action_style}" onclick="return confirm('Excluir todas as falhas?')">&#128465; Excluir todas falhas</button>
+          </form>
+        </div>
+      </details>
+      <!-- Live Log -->
+      <details class="toggle-section" style="border-top:1px solid var(--border)">
+        <summary style="padding:12px 20px">
+          <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+            <span style="width:22px;height:22px;border-radius:6px;background:rgba(99,102,241,.12);display:inline-flex;align-items:center;justify-content:center;font-size:11px">&#9889;</span>
+            Log de atividade
+          </span>
+          <span class="ts-arrow">&#9658;</span>
+        </summary>
+        <div class="ts-body" style="padding:0">
+          <div id="livelog-{pr_id}" style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr style="background:var(--surface2)">
+                <th style="padding:8px 12px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px">T\u00edtulo / URL</th>
+                <th style="padding:8px 12px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px">Etapa</th>
+                <th style="padding:8px 12px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px">Status</th>
+                <th style="padding:8px 12px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px">Hor\u00e1rio</th>
+                <th style="padding:8px 12px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px">Dura\u00e7\u00e3o</th>
+              </tr></thead>
+              <tbody id="livelog-body-{pr_id}">
+                <tr><td colspan="5" style="padding:16px;text-align:center;color:var(--muted)">Carregando...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </details>
     </div>"""
@@ -4138,7 +5271,27 @@ def posts_page(user: User = Depends(get_current_user), db=Depends(get_db)):
           <a href="/app/robot" class="btn">🤖 Ir para Robô</a>
         </div>"""
 
-    body = summary_bar + bot_sections
+    # Auto-refresh when any bot has active jobs
+    _active_job_count = 0
+    _active_post_count = 0
+    if all_ids:
+        _active_job_count = int(db.scalar(
+            select(func.count()).select_from(Job).where(
+                Job.profile_id.in_(all_ids),
+                Job.status.in_([JobStatus.queued, JobStatus.running])
+            )
+        ) or 0)
+        _active_post_count = int(db.scalar(
+            select(func.count()).select_from(Post).where(
+                Post.profile_id.in_(all_ids),
+                Post.status.in_([PostStatus.pending, PostStatus.processing])
+            )
+        ) or 0)
+    refresh_js = ""
+    if _active_job_count > 0 or _active_post_count > 0:
+        refresh_js = "<script>setTimeout(function(){location.reload();},5000);</script>"
+
+    body = flash_html + _ph("secao-posts") + summary_bar + help_menu + bot_sections + refresh_js
     return _layout("Posts", body, user=user)
 
 
@@ -4684,6 +5837,7 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
         items_html = "<div style='padding:40px;text-align:center;color:var(--muted);font-size:14px'>Nenhuma notificação ainda. Quando posts forem publicados ou falharem, aparecerão aqui.</div>"
 
     body = f"""
+    {_ph("pagina-notificacoes")}
     <div style='display:flex;flex-direction:column;gap:20px'>
       <div class="card" style='padding:0;overflow:hidden'>
         <div style='padding:18px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px'>
