@@ -88,6 +88,39 @@ def create_post(
     return WordPressPostResult(post_id=int(post_id), link=post.get("link"))
 
 
+def update_post(
+    *,
+    base_url: str,
+    username: str,
+    app_password: str,
+    post_id: int,
+    title: str,
+    content_html: str,
+    status: str = "publish",
+    featured_media_id: int | None = None,
+    tags: list[int] | None = None,
+    categories: list[int] | None = None,
+) -> WordPressPostResult:
+    url = urljoin(base_url.rstrip("/") + "/", f"wp-json/wp/v2/posts/{int(post_id)}")
+    headers = {"Authorization": _auth_header(username, app_password)}
+    payload: dict[str, Any] = {"title": title, "content": content_html, "status": status}
+    if featured_media_id:
+        payload["featured_media"] = featured_media_id
+    if tags is not None:
+        payload["tags"] = tags
+    if categories is not None:
+        payload["categories"] = categories
+    verify = False if settings.http_insecure_skip_verify else certifi.where()
+    with httpx.Client(timeout=settings.wordpress_timeout_seconds, follow_redirects=True, verify=verify) as client:
+        resp = client.post(url, headers=headers, json=payload)
+    if resp.status_code >= 400:
+        detail = (resp.text or "").strip().replace("\n", " ")
+        raise WordPressError(f"post_update_failed:{resp.status_code}:{detail[:200]}")
+    post = resp.json()
+    updated_id = post.get("id") or post_id
+    return WordPressPostResult(post_id=int(updated_id), link=post.get("link"))
+
+
 def delete_post(*, base_url: str, username: str, app_password: str, post_id: int, force: bool = True) -> None:
     url = urljoin(base_url.rstrip("/") + "/", f"wp-json/wp/v2/posts/{int(post_id)}")
     headers = {"Authorization": _auth_header(username, app_password)}

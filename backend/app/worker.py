@@ -11,7 +11,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.crypto import CryptoError, decrypt_json
@@ -37,7 +37,7 @@ from app.services.gemini import GeminiError, generate_text
 from app.services.images import download_and_prepare_image
 from app.services.rss import fetch_rss_items, keyword_to_google_news_rss
 from app.services.scrape import discover_recipe_links, is_probably_homepage, looks_like_recipe_page, scrape_url
-from app.services.wordpress import WordPressError, create_post, get_or_create_tag_id, list_categories, upload_media
+from app.services.wordpress import WordPressError, create_post, get_or_create_tag_id, list_categories, update_post, upload_media
 
 
 def _fingerprint(*, user_id: str, canonical_url: str) -> str:
@@ -522,8 +522,15 @@ def _get_wordpress_integration(db, *, user_id: str, profile_id: str | None) -> d
     except CryptoError as e:
         raise WordPressError(str(e)) from e
     base_url = str(creds.get("base_url") or "")
-    username = str(creds.get("username") or "")
-    app_password = str(creds.get("app_password") or "")
+    if "users" in creds:
+        users = creds["users"] or []
+        active_username = str(creds.get("active_username") or "")
+        active_user = next((u for u in users if u.get("username") == active_username), users[0] if users else {})
+        username = str(active_user.get("username") or "")
+        app_password = str(active_user.get("app_password") or "")
+    else:
+        username = str(creds.get("username") or "")
+        app_password = str(creds.get("app_password") or "")
     if not base_url or not username or not app_password:
         raise WordPressError("invalid_wordpress_credentials")
     return {"base_url": base_url, "username": username, "app_password": app_password}
@@ -535,14 +542,15 @@ def _handle_publish_wp(db, job: Job):
     post = db.scalar(select(Post).where(Post.id == job.post_id, Post.user_id == job.user_id))
     if not post:
         raise ValueError("post_not_found")
-    if post.status == PostStatus.completed and post.wp_post_id:
+    outputs = post.outputs_json or {}
+    correction_requested = isinstance(outputs, dict) and bool(outputs.get("correction_requested"))
+    if post.status == PostStatus.completed and post.wp_post_id and not correction_requested:
         log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_PUBLISH_WP, status="skipped", message="already_published")
         return
     content = db.scalar(select(CollectedContent).where(CollectedContent.id == post.collected_content_id, CollectedContent.user_id == job.user_id))
     if not content:
         raise ValueError("content_not_found")
     _ensure_post_processing(db, post)
-    outputs = post.outputs_json or {}
     recipe = outputs.get("recipe") if isinstance(outputs, dict) else None
     wp_text = str((recipe or {}).get("site") or "").strip() if isinstance(recipe, dict) else ""
     if not wp_text:
@@ -596,7 +604,14 @@ def _handle_publish_wp(db, job: Job):
                 if s:
                     names.append(s)
         if names:
-            tag_ids = [get_or_create_tag_id(base_url=creds["base_url"], username=creds["username"], app_password=creds["app_password"], tag_name=n) for n in names[:12]]
+            try:
+                tag_ids = [get_or_create_tag_id(base_url=creds["base_url"], username=creds["username"], app_password=creds["app_password"], tag_name=n) for n in names[:12]]
+            except WordPressError as _tag_err:
+                # User may lack permission to create tags — publish without tags
+                log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id,
+                          stage=JOB_PUBLISH_WP, status="warning", message="tag_creation_skipped",
+                          meta={"reason": str(_tag_err)[:120]})
+                tag_ids = None
     featured_media_id = None
     image_url = (outputs.get("image") or {}).get("url")
     if image_url:
@@ -650,24 +665,45 @@ def _handle_publish_wp(db, job: Job):
             meta={"title": title, "canonical_url": content.canonical_url},
         )
         return
-    wp_post = create_post(
-        base_url=creds["base_url"],
-        username=creds["username"],
-        app_password=creds["app_password"],
-        title=title,
-        content_html=_render_wp_html(wp_text),
-        status="publish",
-        featured_media_id=featured_media_id,
-        tags=tag_ids,
-        categories=category_ids,
-    )
+    content_html = _render_wp_html(wp_text)
+    if correction_requested and post.wp_post_id:
+        wp_post = update_post(
+            base_url=creds["base_url"],
+            username=creds["username"],
+            app_password=creds["app_password"],
+            post_id=int(post.wp_post_id),
+            title=title,
+            content_html=content_html,
+            status="publish",
+            featured_media_id=featured_media_id,
+            tags=tag_ids,
+            categories=category_ids,
+        )
+        log_message = "wordpress_updated"
+    else:
+        wp_post = create_post(
+            base_url=creds["base_url"],
+            username=creds["username"],
+            app_password=creds["app_password"],
+            title=title,
+            content_html=content_html,
+            status="publish",
+            featured_media_id=featured_media_id,
+            tags=tag_ids,
+            categories=category_ids,
+        )
+        log_message = "wordpress_published"
     post.wp_post_id = wp_post.post_id
     post.wp_url = wp_post.link
     post.status = PostStatus.completed
     post.published_at = datetime.utcnow()
     post.updated_at = datetime.utcnow()
+    if isinstance(post.outputs_json, dict) and post.outputs_json.get("correction_requested"):
+        outputs3 = dict(post.outputs_json or {})
+        outputs3.pop("correction_requested", None)
+        post.outputs_json = outputs3
     db.add(post)
-    log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_PUBLISH_WP, status="ok", message="wordpress_published", meta={"wp_post_id": wp_post.post_id, "wp_url": wp_post.link})
+    log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_PUBLISH_WP, status="ok", message=log_message, meta={"wp_post_id": wp_post.post_id, "wp_url": wp_post.link})
     if job.profile_id:
         profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == job.profile_id))
         publish_cfg = dict((profile.publish_config_json if profile else {}) or {})
@@ -1166,6 +1202,37 @@ def run_worker_tick(*, worker_id: str) -> bool:
             job.status = JobStatus.succeeded
             job.updated_at = datetime.utcnow()
             db.add(job)
+            db.flush()
+            # Auto-stop: deactivate profile when queue is empty
+            if job.profile_id:
+                remaining_jobs = db.scalar(
+                    select(func.count()).select_from(Job).where(
+                        Job.profile_id == job.profile_id,
+                        Job.status.in_([JobStatus.queued, JobStatus.running]),
+                        Job.id != job.id,
+                    )
+                ) or 0
+                remaining_posts = db.scalar(
+                    select(func.count()).select_from(Post).where(
+                        Post.profile_id == job.profile_id,
+                        Post.status.in_([PostStatus.pending, PostStatus.processing]),
+                    )
+                ) or 0
+                if remaining_jobs == 0 and remaining_posts == 0:
+                    profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == job.profile_id))
+                    if profile and profile.active:
+                        profile.active = False
+                        profile.updated_at = datetime.utcnow()
+                        db.add(profile)
+                        log_event(
+                            db,
+                            user_id=job.user_id,
+                            profile_id=job.profile_id,
+                            stage="auto_stop",
+                            status="ok",
+                            message="bot_auto_stopped",
+                            meta={"reason": "queue_empty"},
+                        )
             db.commit()
             return True
         except (FacebookError, GeminiError, WordPressError, Exception) as e:
