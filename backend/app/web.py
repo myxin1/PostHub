@@ -2820,12 +2820,62 @@ def robot_run_now(bot_id: str = Form(default=None), user: User = Depends(get_cur
     if not bot:
         return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
     now = datetime.utcnow()
-    queued = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued)) or 0)
-    if queued <= 0:
-        return RedirectResponse("/app/posts?msg=Nenhuma+pend%C3%AAncia+para+rodar+agora.", status_code=status.HTTP_302_FOUND)
-    db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
+    did = 0
+
+    # 1. Libera jobs queued com run_at no futuro
+    did += db.execute(
+        update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued)
+        .values(run_at=now)
+    ).rowcount
+
+    # 2. Reseta jobs running travados há mais de 5 min de volta para queued
+    stuck_cutoff = now - timedelta(minutes=5)
+    did += db.execute(
+        update(Job).where(
+            Job.profile_id == bot.id,
+            Job.status == JobStatus.running,
+            Job.locked_at < stuck_cutoff,
+        ).values(status=JobStatus.queued, run_at=now, locked_at=None, locked_by=None)
+    ).rowcount
+
+    # 3. Posts pending/processing sem nenhum job ativo → re-enfileira o próximo step
+    pipeline = [JOB_CLEAN, JOB_AI, JOB_MEDIA, JOB_PUBLISH_WP]
+    orphan_posts = list(db.scalars(
+        select(Post).where(
+            Post.profile_id == bot.id,
+            Post.status.in_([PostStatus.pending, PostStatus.processing]),
+        )
+    ))
+    for p in orphan_posts:
+        active = int(db.scalar(
+            select(func.count()).select_from(Job).where(
+                Job.post_id == p.id,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )
+        ) or 0)
+        if active:
+            continue
+        # Determina de onde retomar com base no último job bem-sucedido
+        last_ok_type = db.scalar(
+            select(Job.type).where(Job.post_id == p.id, Job.status == JobStatus.succeeded)
+            .order_by(Job.updated_at.desc()).limit(1)
+        )
+        if last_ok_type in pipeline:
+            idx = pipeline.index(last_ok_type)
+            next_job = pipeline[idx + 1] if idx + 1 < len(pipeline) else JOB_PUBLISH_WP
+        else:
+            next_job = JOB_CLEAN
+        p.status = PostStatus.pending
+        p.updated_at = now
+        db.add(p)
+        enqueue_job(db, user_id=p.user_id, profile_id=p.profile_id, post_id=p.id,
+                    job_type=next_job, payload={"collected_content_id": p.collected_content_id})
+        did += 1
+
     db.commit()
-    return RedirectResponse("/app/posts?msg=Fila+liberada.", status_code=status.HTTP_302_FOUND)
+    if not did:
+        return RedirectResponse("/app/posts?msg=Nada+pendente+para+rodar.", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/app/posts?msg=Fila+liberada+e+retomada.", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/robot/retry-ai", include_in_schema=False)
@@ -5193,7 +5243,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                     main = (
                         "<span style='display:inline-flex;align-items:center;gap:6px;color:#10b981;font-size:11px;font-weight:700;"
                         "background:rgba(16,185,129,.10);padding:3px 8px;border-radius:20px;white-space:nowrap'>"
-                        f"{stage}: agora</span>"
+                        f"Na fila</span>"
                     )
                     return f"<div>{main}{elapsed_row}</div>"
                 target_ms = int(run_at.replace(tzinfo=timezone.utc).timestamp() * 1000)
@@ -5291,7 +5341,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         proc_badge = (f'<span style="display:flex;flex-direction:column;align-items:center;gap:1px">'
                       f'<span style="font-size:15px;font-weight:800;color:#6366f1">{c_pend}</span>'
                       f'<span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pend.</span></span>') if True else ""
-        can_run_now = _b_qd > 0
+        can_run_now = _b_qd > 0 or _b_rj > 0 or c_pend > 0
         can_retry_ai = c_fail > 0
         can_cancel_pending = c_pend > 0
         can_delete_completed = c_pub > 0
