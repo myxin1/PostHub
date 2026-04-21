@@ -1081,26 +1081,85 @@ def login_page(request: Request):
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Entrar - PostHub</title>
-  <style>{_base_css()}</style>
+  <title>Entrar — PostHub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/posthub.css?v=2" />
+  <style>
+    html, body {{
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      box-sizing: border-box;
+    }}
+    .login-wrap {{
+      width: 100%;
+      max-width: 420px;
+    }}
+    .login-logo {{
+      width: 100%;
+      max-width: 200px;
+      height: 56px;
+      object-fit: contain;
+      display: block;
+      margin: 0 auto 24px;
+      filter: drop-shadow(0 8px 24px rgba(139,92,246,.35));
+    }}
+    .login-card {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 32px 28px;
+      box-shadow: 0 24px 60px rgba(0,0,0,.35);
+    }}
+    .login-title {{
+      font-size: 22px;
+      font-weight: 800;
+      margin: 0 0 4px;
+      color: var(--text);
+    }}
+    .login-sub {{
+      font-size: 13px;
+      color: var(--muted);
+      margin: 0 0 24px;
+    }}
+    .login-err {{
+      background: rgba(239,68,68,.1);
+      border: 1px solid rgba(239,68,68,.3);
+      color: #f87171;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }}
+    @media (max-width: 480px) {{
+      .login-card {{ padding: 24px 18px; border-radius: 20px; }}
+      .login-title {{ font-size: 20px; }}
+    }}
+  </style>
+  <script>(function(){{ document.documentElement.setAttribute('data-theme', localStorage.getItem('posthub-theme') || 'roxo'); }})();</script>
 </head>
 <body>
-  <div class="public-wrap">
-    <img class="brand-logo-login" src="/brand/logo_posthub.png" alt="PostHub" onerror="this.onerror=null;this.src='/static/logo.svg';" />
-    <div class="card">
-      <div class="hero">
-        <h2>Entrar</h2>
-        <p>Use seu usuário e senha para acessar o painel.</p>
-      </div>
-      <div style="margin-top:12px" class="muted">{msg}</div>
-      <form method="post" action="/app/login" style="margin-top: 14px;">
-        <label>Usuário / ID</label>
-        <input name="email" type="text" placeholder="usuario" required />
-        <label>Senha</label>
-        <input name="password" type="password" placeholder="Sua senha" required />
-        <div style="margin-top:12px">
-          <button class="btn" type="submit" style="width:100%">Entrar</button>
-        </div>
+  <div class="login-wrap">
+    <img class="login-logo" src="/brand/logo_posthub.png" alt="PostHub"
+         onerror="this.onerror=null;this.src='/static/logo.svg';" />
+    <div class="login-card">
+      <h1 class="login-title">Entrar no PostHub</h1>
+      <p class="login-sub">Use seu usuário e senha para acessar o painel.</p>
+      {f'<div class="login-err">{msg}</div>' if msg else ''}
+      <form method="post" action="/app/login">
+        <label>Usuário / E-mail</label>
+        <input name="email" type="text" placeholder="usuario ou email@exemplo.com"
+               autocomplete="username" autocapitalize="none" required />
+        <label style="margin-top:14px">Senha</label>
+        <input name="password" type="password" placeholder="••••••"
+               autocomplete="current-password" required />
+        <button class="btn" type="submit" style="width:100%;margin-top:20px;padding:13px">
+          Entrar
+        </button>
       </form>
       {google_btn}
     </div>
