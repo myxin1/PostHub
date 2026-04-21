@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 
 from app.api.deps import get_current_user, get_db, require_admin
 from app.config import settings
@@ -1796,36 +1796,44 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     created = int(meta.get("created") or 0)
     skipped = int(meta.get("skipped_duplicate") or meta.get("skipped") or 0)
     ignored = int(meta.get("skipped_non_recipe") or 0) + int(meta.get("skipped_error") or 0)
-    queued_jobs = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued)) or 0)
-    queued_due = int(
-        db.scalar(
-            select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued, Job.run_at <= now)
-        )
-        or 0
-    )
-    queued_scheduled = int(
-        db.scalar(
-            select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued, Job.run_at > now)
-        )
-        or 0
-    )
-    running_jobs = int(
-        db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.running)) or 0
-    )
-    pending_posts = int(
-        db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == bot.id, Post.status == PostStatus.pending)) or 0
-    )
-    processing_posts = int(
-        db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == bot.id, Post.status == PostStatus.processing))
-        or 0
-    )
+    # ── Contagens em 2 queries em vez de 8 ──────────────────────────────────────
+    _jc = db.execute(
+        select(
+            func.sum(case((Job.status == JobStatus.queued, 1), else_=0)).label("queued"),
+            func.sum(case(((Job.status == JobStatus.queued) & (Job.run_at <= now), 1), else_=0)).label("queued_due"),
+            func.sum(case(((Job.status == JobStatus.queued) & (Job.run_at > now), 1), else_=0)).label("queued_sched"),
+            func.sum(case((Job.status == JobStatus.running, 1), else_=0)).label("running"),
+        ).where(Job.profile_id == bot.id)
+    ).one()
+    queued_jobs      = int(_jc.queued or 0)
+    queued_due       = int(_jc.queued_due or 0)
+    queued_scheduled = int(_jc.queued_sched or 0)
+    running_jobs     = int(_jc.running or 0)
+
+    _pc = db.execute(
+        select(
+            func.sum(case((Post.status == PostStatus.pending, 1), else_=0)).label("pending"),
+            func.sum(case((Post.status == PostStatus.processing, 1), else_=0)).label("processing"),
+            func.sum(case((Post.status == PostStatus.failed, 1), else_=0)).label("failed"),
+        ).where(Post.profile_id == bot.id)
+    ).one()
+    pending_posts    = int(_pc.pending or 0)
+    processing_posts = int(_pc.processing or 0)
+    failed_count     = int(_pc.failed or 0)
+
     in_progress = (queued_jobs + running_jobs + pending_posts + processing_posts) > 0
-    gemini_ok = (
-        db.scalar(select(Integration.id).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.GEMINI)) is not None
-    )
+
+    # ── Integrations: 1 query para buscar Gemini + WP juntos ────────────────────
+    _integs = list(db.scalars(
+        select(Integration).where(
+            Integration.profile_id == bot.id,
+            Integration.type.in_([IntegrationType.GEMINI, IntegrationType.WORDPRESS])
+        )
+    ))
+    _gemini_integ = next((i for i in _integs if i.type == IntegrationType.GEMINI), None)
+    _wp_integ_check = next((i for i in _integs if i.type == IntegrationType.WORDPRESS), None)
+    gemini_ok = _gemini_integ is not None
     gemini_status = "OK" if gemini_ok else "FALTANDO"
-    # Verifica WordPress do bot ativo
-    _wp_integ_check = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.WORDPRESS))
     wp_configured = False
     if _wp_integ_check:
         try:
@@ -1840,9 +1848,6 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             wp_configured = False
     wp_status_label = "Configurado" if wp_configured else "Não configurado"
     wp_status_color = "#10b981" if wp_configured else "#ef4444"
-    failed_count = int(
-        db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == bot.id, Post.status == PostStatus.failed)) or 0
-    )
     posts = list(
         db.execute(
             select(Post, CollectedContent.title)
@@ -1860,10 +1865,29 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     banner = ""
     if msg:
         banner = f"<div class='card' style='border-color: rgba(255,255,255,.08)'><b>{html.escape(msg)}</b></div>"
-    # accelerate agora está inline no robot-actions
-    # stats por projeto
+    # ── Batch stats de todos os projetos — 2 queries no total ───────────────────
+    _all_ids = [pr.id for pr in all_profiles]
+    # Post counts por projeto (1 query)
+    _proj_post_rows = db.execute(
+        select(
+            Post.profile_id,
+            func.sum(case((Post.status == PostStatus.completed, 1), else_=0)).label("completed"),
+            func.sum(case((Post.status == PostStatus.failed, 1), else_=0)).label("failed"),
+            func.sum(case((Post.status == PostStatus.pending, 1), else_=0)).label("pending"),
+        ).where(Post.profile_id.in_(_all_ids)).group_by(Post.profile_id)
+    ).all()
+    _proj_counts = {r.profile_id: (int(r.completed or 0), int(r.failed or 0), int(r.pending or 0)) for r in _proj_post_rows}
+    # WP integrations por projeto (1 query)
+    _proj_wp_rows = list(db.scalars(
+        select(Integration).where(
+            Integration.profile_id.in_(_all_ids),
+            Integration.type == IntegrationType.WORDPRESS
+        )
+    ))
+    _proj_wp = {w.profile_id: w for w in _proj_wp_rows}
+
     def _proj_stats(pr):
-        wp = db.scalar(select(Integration).where(Integration.profile_id == pr.id, Integration.type == IntegrationType.WORDPRESS))
+        wp = _proj_wp.get(pr.id)
         wp_url = ""
         if wp:
             try:
@@ -1871,9 +1895,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
                 wp_url = (creds.get("base_url") or "") if isinstance(creds, dict) else ""
             except Exception:
                 pass
-        completed = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.completed)) or 0)
-        failed    = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.failed)) or 0)
-        pending   = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.pending)) or 0)
+        completed, failed, pending = _proj_counts.get(pr.id, (0, 0, 0))
         return wp_url, completed, failed, pending
 
     # SVG icons (16px, no fill, stroke only)
