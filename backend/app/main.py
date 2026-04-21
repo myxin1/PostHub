@@ -4,7 +4,9 @@ import asyncio
 import os
 import socket
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.middleware.sessions import SessionMiddleware
@@ -28,17 +30,25 @@ from app.web import router as web_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="PostHub")
-    # Trust proxy headers (X-Forwarded-Proto, X-Forwarded-For) from Vercel/reverse proxies
-    # so that request.url uses https:// instead of http://
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
+
+    @app.exception_handler(HTTPException)
+    async def _http_exc(request: Request, exc: HTTPException):
+        # Rotas web /app/* não autenticadas → redirect para login
+        if exc.status_code == 401 and request.url.path.startswith("/app"):
+            return RedirectResponse(url="/app/login", status_code=302)
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.isdir(static_dir):
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
     brand_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Logo"))
     if os.path.isdir(brand_dir):
         app.mount("/brand", StaticFiles(directory=brand_dir), name="brand")
+    sounds_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "SONS"))
+    if os.path.isdir(sounds_dir):
+        app.mount("/sons", StaticFiles(directory=sounds_dir), name="sons")
 
     _startup_error: list[str] = []
 
@@ -51,7 +61,7 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             import traceback
             _startup_error.append(traceback.format_exc())
-        if os.getenv("POSTHUB_INLINE_WORKER", "0") == "1":
+        if os.getenv("POSTHUB_INLINE_WORKER", "1") != "0":
             worker_id = f"inline:{socket.gethostname()}:{os.getpid()}"
 
             async def loop():
