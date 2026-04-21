@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 
 
 def _safe(s: object) -> str:
@@ -90,6 +91,26 @@ def _fmt_dt(dt: datetime | None, *, user: User) -> str:
     return local.strftime("%d/%m/%Y %H:%M:%S")
 
 
+def _to_user_local(dt: datetime | None, *, user: User) -> datetime | None:
+    if not dt:
+        return None
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.astimezone(_user_zoneinfo(user)).replace(tzinfo=None)
+    except Exception:
+        return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+
+
+def _local_input_to_utc_naive(value: str, *, user: User) -> datetime:
+    local = datetime.fromisoformat((value or "").strip().replace("T", " "))
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=_user_zoneinfo(user))
+    return local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 DEFAULT_RECIPE_CATEGORIES = [
     "Acompanhamentos",
     "Alimentos na dieta low carb",
@@ -136,6 +157,26 @@ DEFAULT_RECIPE_CATEGORIES = [
 ]
 
 
+def _ensure_publish_config_defaults(db, *, bot: AutomationProfile) -> bool:
+    cfg = dict(bot.publish_config_json or {})
+    changed = False
+    if not str(cfg.get("facebook_link") or "").strip():
+        cfg["facebook_link"] = "comments"
+        changed = True
+    if not str(cfg.get("default_category") or "").strip():
+        cfg["default_category"] = "Receitas"
+        changed = True
+    cats = cfg.get("categories")
+    clean_cats = [str(c).strip() for c in cats if str(c).strip()] if isinstance(cats, list) else []
+    if not clean_cats:
+        cfg["categories"] = list(DEFAULT_RECIPE_CATEGORIES)
+        changed = True
+    if changed:
+        bot.publish_config_json = cfg
+        db.add(bot)
+    return changed
+
+
 def _get_profile_for_user(db, *, profile_id: str, user: User) -> AutomationProfile | None:
     if user.role == UserRole.ADMIN:
         return db.scalar(select(AutomationProfile).where(AutomationProfile.id == profile_id))
@@ -143,606 +184,10 @@ def _get_profile_for_user(db, *, profile_id: str, user: User) -> AutomationProfi
 
 
 def _base_css() -> str:
-    return """
-    :root, [data-theme="roxo"] {
-      --bg:#07060b; --bg2:#0b0a10;
-      --surface:rgba(18,16,28,.78); --surface2:rgba(10,9,15,.75);
-      --border:rgba(255,255,255,.10); --border2:rgba(255,255,255,.14);
-      --text:#f9fafb; --muted:rgba(249,250,251,.65);
-      --primary:#8b5cf6; --primary2:#7c3aed; --pink:#ec4899;
-      --shadow:0 16px 50px rgba(0,0,0,.50); --radius:18px;
-      --grad1:rgba(139,92,246,.30); --grad2:rgba(236,72,153,.22); --grad3:rgba(124,58,237,.18);
-      --input-bg:rgba(10,9,15,.72); --sidebar-bg:linear-gradient(180deg,rgba(10,9,15,.9),rgba(7,6,11,.7));
-    }
-    [data-theme="oceano"] {
-      --bg:#060b0f; --bg2:#080d14;
-      --surface:rgba(8,20,36,.82); --surface2:rgba(5,13,24,.80);
-      --border:rgba(14,165,233,.15); --border2:rgba(14,165,233,.28);
-      --text:#f0f9ff; --muted:rgba(224,242,254,.60);
-      --primary:#0ea5e9; --primary2:#0284c7; --pink:#38bdf8;
-      --shadow:0 16px 50px rgba(0,0,0,.55); --radius:18px;
-      --grad1:rgba(14,165,233,.28); --grad2:rgba(56,189,248,.18); --grad3:rgba(2,132,199,.16);
-      --input-bg:rgba(4,12,24,.75); --sidebar-bg:linear-gradient(180deg,rgba(4,12,24,.92),rgba(6,11,15,.75));
-    }
-    [data-theme="floresta"] {
-      --bg:#050c07; --bg2:#06100a;
-      --surface:rgba(8,20,12,.82); --surface2:rgba(5,13,8,.80);
-      --border:rgba(16,185,129,.15); --border2:rgba(16,185,129,.28);
-      --text:#f0fdf4; --muted:rgba(220,252,231,.60);
-      --primary:#10b981; --primary2:#059669; --pink:#34d399;
-      --shadow:0 16px 50px rgba(0,0,0,.55); --radius:18px;
-      --grad1:rgba(16,185,129,.28); --grad2:rgba(52,211,153,.18); --grad3:rgba(5,150,105,.16);
-      --input-bg:rgba(4,12,7,.75); --sidebar-bg:linear-gradient(180deg,rgba(4,12,7,.92),rgba(5,10,6,.75));
-    }
-    [data-theme="claro"] {
-      --bg:#f8fafc; --bg2:#f1f5f9;
-      --surface:rgba(255,255,255,.95); --surface2:rgba(248,250,252,.92);
-      --border:rgba(0,0,0,.09); --border2:rgba(0,0,0,.16);
-      --text:#0f172a; --muted:rgba(15,23,42,.52);
-      --primary:#7c3aed; --primary2:#6d28d9; --pink:#db2777;
-      --shadow:0 4px 24px rgba(0,0,0,.10); --radius:18px;
-      --grad1:rgba(139,92,246,.08); --grad2:rgba(236,72,153,.06); --grad3:rgba(124,58,237,.05);
-      --input-bg:rgba(248,250,252,.95); --sidebar-bg:linear-gradient(180deg,rgba(241,245,249,.98),rgba(248,250,252,.96));
-    }
-    [data-theme="rosa"] {
-      --bg:#fff0f5; --bg2:#ffe4ed;
-      --surface:rgba(255,255,255,.96); --surface2:rgba(255,240,245,.92);
-      --border:rgba(225,29,72,.11); --border2:rgba(225,29,72,.20);
-      --text:#1c0510; --muted:rgba(28,5,16,.52);
-      --primary:#e11d48; --primary2:#be123c; --pink:#f43f5e;
-      --shadow:0 4px 24px rgba(225,29,72,.12); --radius:18px;
-      --grad1:rgba(244,63,94,.12); --grad2:rgba(251,113,133,.08); --grad3:rgba(225,29,72,.07);
-      --input-bg:rgba(255,255,255,.97); --sidebar-bg:linear-gradient(180deg,rgba(255,228,232,.98),rgba(255,240,245,.96));
-    }
-    [data-theme="ceu"] {
-      --bg:#f0f7ff; --bg2:#e0efff;
-      --surface:rgba(255,255,255,.96); --surface2:rgba(240,247,255,.92);
-      --border:rgba(59,130,246,.11); --border2:rgba(59,130,246,.20);
-      --text:#0c1a2e; --muted:rgba(12,26,46,.52);
-      --primary:#2563eb; --primary2:#1d4ed8; --pink:#60a5fa;
-      --shadow:0 4px 24px rgba(37,99,235,.10); --radius:18px;
-      --grad1:rgba(96,165,250,.14); --grad2:rgba(59,130,246,.10); --grad3:rgba(37,99,235,.08);
-      --input-bg:rgba(255,255,255,.97); --sidebar-bg:linear-gradient(180deg,rgba(224,239,255,.98),rgba(240,247,255,.96));
-    }
-    [data-theme="corporativo"] {
-      --bg:#f5f5f5; --bg2:#ebebeb;
-      --surface:rgba(255,255,255,.98); --surface2:rgba(245,245,245,.95);
-      --border:rgba(0,0,0,.10); --border2:rgba(0,0,0,.18);
-      --text:#1a1a1a; --muted:rgba(26,26,26,.52);
-      --primary:#0077cc; --primary2:#005fa3; --pink:#e67e00;
-      --shadow:0 4px 20px rgba(0,0,0,.08); --radius:18px;
-      --grad1:rgba(0,119,204,.08); --grad2:rgba(230,126,0,.06); --grad3:rgba(0,95,163,.05);
-      --input-bg:#ffffff; --sidebar-bg:linear-gradient(180deg,rgba(235,235,235,.98),rgba(245,245,245,.96));
-    }
-    [data-theme="claro"] input,[data-theme="claro"] select,[data-theme="claro"] textarea,
-    [data-theme="rosa"] input,[data-theme="rosa"] select,[data-theme="rosa"] textarea,
-    [data-theme="ceu"] input,[data-theme="ceu"] select,[data-theme="ceu"] textarea,
-    [data-theme="corporativo"] input,[data-theme="corporativo"] select,[data-theme="corporativo"] textarea {
-      color: var(--text) !important; border-color: var(--border2) !important;
-    }
-    [data-theme="claro"] .brand,[data-theme="rosa"] .brand,[data-theme="ceu"] .brand,[data-theme="corporativo"] .brand { background: var(--surface2); }
-    [data-theme="claro"] .sidebar-footer,[data-theme="rosa"] .sidebar-footer,[data-theme="ceu"] .sidebar-footer,[data-theme="corporativo"] .sidebar-footer { background: var(--surface2); }
-
-    /* Dev Menu */
-    .dev-menu-wrap { position:relative; }
-    .dev-menu-btn {
-      display:inline-flex; align-items:center; gap:6px;
-      padding:6px 13px; border-radius:10px;
-      border:1px solid var(--border2); background:var(--surface);
-      color:var(--text); font-size:13px; font-family:inherit; cursor:pointer;
-      transition:background .15s, border-color .15s;
-    }
-    .dev-menu-btn:hover { background:var(--surface2); border-color:var(--primary); }
-    .dev-menu-btn.open { border-color:var(--primary); box-shadow:0 0 0 3px rgba(139,92,246,.15); }
-    .dev-menu-dd {
-      display:none; position:absolute; top:calc(100% + 8px); right:0; z-index:9999;
-      background:var(--bg2); border:1px solid var(--border2);
-      border-radius:16px; box-shadow:0 16px 48px rgba(0,0,0,.35);
-      padding:14px; min-width:260px;
-    }
-    .dev-menu-dd.open { display:flex; flex-direction:column; gap:12px; }
-    .dev-menu-section { display:flex; flex-direction:column; gap:6px; }
-    .dev-menu-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-bottom:2px; }
-    .dev-theme-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; }
-    .dev-theme-btn {
-      padding:6px 4px; border-radius:8px; border:1px solid var(--border2);
-      background:var(--surface); color:var(--text); font-size:11px;
-      cursor:pointer; text-align:center; transition:background .15s, border-color .15s;
-      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-    }
-    .dev-theme-btn:hover { border-color:var(--primary); background:var(--surface2); }
-    .dev-theme-btn.active { border-color:var(--primary); background:rgba(139,92,246,.18); font-weight:700; }
-    .dev-action-btn {
-      display:flex; align-items:center; gap:8px;
-      width:100%; padding:9px 12px; border-radius:10px;
-      border:1px solid var(--border2); background:var(--surface);
-      color:var(--text); font-size:13px; font-family:inherit; cursor:pointer;
-      transition:background .15s, border-color .15s; text-align:left;
-    }
-    .dev-action-btn:hover { background:var(--surface2); border-color:var(--primary); }
-    .dev-divider { height:1px; background:var(--border); margin:2px 0; }
-
-    /* Nav submenus */
-    .nav-group { display:flex; flex-direction:column; }
-    .nav-parent {
-      display:flex; align-items:center; gap:10px; padding:10px 12px;
-      border-radius:14px; border:1px solid transparent;
-      color:var(--text); opacity:.85;
-      background:transparent; cursor:pointer;
-      font-size:inherit; font-family:inherit; width:100%; text-align:left;
-    }
-    .nav-parent:hover { opacity:1; border-color:var(--border2); background:var(--border); }
-    .nav-group .nav-sub { display:none; flex-direction:column; gap:2px; padding:4px 0 4px 20px; }
-    .nav-group.open .nav-sub { display:flex; }
-    .nav-sub a {
-      display:flex; align-items:center; gap:8px;
-      padding:7px 12px; border-radius:12px; border:1px solid transparent;
-      color:var(--muted); font-size:13px;
-    }
-    .nav-sub a:hover { color:var(--text); background:var(--border); border-color:var(--border2); }
-    .nav-sub a.active { color:var(--text); background:rgba(139,92,246,.18); border-color:rgba(139,92,246,.30); font-weight:600; }
-    [data-theme="oceano"] .nav-sub a.active { background:rgba(14,165,233,.18); border-color:rgba(14,165,233,.30); }
-    [data-theme="floresta"] .nav-sub a.active { background:rgba(16,185,129,.18); border-color:rgba(16,185,129,.30); }
-    [data-theme="rosa"] .nav-sub a.active { background:rgba(225,29,72,.14); border-color:rgba(225,29,72,.28); }
-    [data-theme="ceu"] .nav-sub a.active { background:rgba(37,99,235,.14); border-color:rgba(37,99,235,.28); }
-    [data-theme="corporativo"] .nav-sub a.active { background:rgba(0,119,204,.12); border-color:rgba(0,119,204,.25); }
-    .nav-step-num { display:inline-flex; align-items:center; justify-content:center;
-      width:16px; height:16px; border-radius:999px; background:var(--border2);
-      font-size:9px; font-weight:700; flex-shrink:0; opacity:.7; }
-    .nav-sub a.active .nav-step-num { background:var(--primary); opacity:1; color:#fff; }
-    .nav-sub-arrow { margin-left:auto; font-size:9px; transition:transform .25s; }
-    .nav-group.open .nav-sub-arrow { transform:rotate(90deg); }
-
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body {
-      margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      color: var(--text);
-      background:
-        radial-gradient(1200px 700px at 15% 15%, var(--grad1), transparent 55%),
-        radial-gradient(900px 600px at 85% 25%, var(--grad2), transparent 60%),
-        radial-gradient(900px 700px at 60% 80%, var(--grad3), transparent 60%),
-        linear-gradient(180deg, var(--bg), var(--bg2));
-    }
-    a { color: inherit; text-decoration: none; }
-    .app { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; transition: grid-template-columns .25s; }
-    .app.sidebar-collapsed { grid-template-columns: 0 1fr; }
-    .sidebar {
-      position: sticky;
-      top: 0;
-      height: 100vh;
-      width: 280px;
-      padding: 20px 16px;
-      border-right: 1px solid var(--border);
-      background: var(--sidebar-bg);
-      backdrop-filter: blur(12px);
-      overflow: hidden;
-      transition: width .25s, padding .25s, border .25s;
-    }
-    .app.sidebar-collapsed .sidebar { width: 0; padding: 0; border: none; }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      border: 1px solid var(--border);
-      background: rgba(18, 16, 28, 0.55);
-      box-shadow: var(--shadow);
-      margin-bottom: 14px;
-    }
-    .brand-logo-wide {
-      width: 100%;
-      height: 44px;
-      object-fit: contain;
-      display: block;
-      filter: drop-shadow(0 14px 30px rgba(0,0,0,0.35));
-    }
-    .brand-logo-login {
-      width: 100%;
-      height: 84px;
-      object-fit: contain;
-      display: block;
-      filter: drop-shadow(0 18px 40px rgba(0,0,0,0.42));
-      margin-bottom: 14px;
-    }
-    .logo {
-      width: 34px;
-      height: 34px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, var(--primary), var(--pink));
-      box-shadow: 0 8px 30px rgba(139, 92, 246, 0.35);
-      display: grid;
-      place-items: center;
-      font-weight: 800;
-      font-size: 12px;
-      letter-spacing: 0.6px;
-      color: rgba(255, 255, 255, 0.96);
-      text-shadow: 0 8px 20px rgba(0,0,0,0.35);
-    }
-    .brand h1 { font-size: 14px; margin: 0; letter-spacing: 0.3px; }
-    .brand .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-    .nav { display: grid; gap: 6px; margin-top: 12px; }
-    .nav a {
-      display: flex; align-items: center; gap: 10px;
-      padding: 10px 12px; border-radius: 14px;
-      border: 1px solid transparent;
-      color: var(--text); opacity: .85;
-      background: transparent;
-    }
-    .nav a:hover { opacity:1; border-color: var(--border2); background: var(--border); }
-    .nav .dot {
-      width: 9px; height: 9px; border-radius: 999px; flex-shrink:0;
-      background: var(--primary); opacity:.7;
-      box-shadow: 0 0 0 3px rgba(0,0,0,.08);
-    }
-    .nav a:hover .dot { background: var(--pink); opacity:1; }
-    .sidebar-footer {
-      position: absolute;
-      left: 16px;
-      right: 16px;
-      bottom: 16px;
-      padding: 12px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background: rgba(18, 16, 28, 0.50);
-    }
-    .sidebar-footer .muted { color: var(--muted); font-size: 12px; margin: 0; }
-    .main { padding: 24px 32px 40px; min-width: 0; }
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 14px;
-    }
-    .title { font-size: 18px; margin: 0; letter-spacing: 0.2px; }
-    .muted { color: var(--muted); }
-    .content { max-width: 1600px; width: 100%; }
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 18px;
-      box-shadow: var(--shadow);
-    }
-    .card + .card { margin-top: 14px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; }
-    .col { flex: 1; min-width: 280px; }
-    label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }
-    input, select, textarea {
-      width: 100%;
-      padding: 12px 14px;
-      border-radius: 14px;
-      border: 1.5px solid var(--border2);
-      background: var(--input-bg);
-      color: var(--text);
-      outline: none;
-      box-shadow: inset 0 1px 3px rgba(0,0,0,.12);
-      transition: border-color .15s, box-shadow .15s;
-    }
-    input:focus, select:focus, textarea:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(139,92,246,.18), inset 0 1px 3px rgba(0,0,0,.08);
-    }
-    input:not(:placeholder-shown), select, textarea:not(:placeholder-shown) {
-      border-color: var(--border2);
-    }
-    textarea { min-height: 140px; resize: vertical; }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 10px 18px;
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      background: linear-gradient(135deg, var(--primary), var(--pink));
-      color: white;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 13px;
-      letter-spacing: 0.2px;
-      box-shadow: 0 4px 14px rgba(139, 92, 246, 0.28), 0 1px 3px rgba(0,0,0,.12);
-      transition: transform .15s ease, box-shadow .15s ease, filter .15s ease, background .15s ease;
-      white-space: nowrap;
-    }
-    .btn:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 8px 22px rgba(139, 92, 246, 0.38), 0 2px 6px rgba(0,0,0,.16);
-      filter: brightness(1.08);
-    }
-    .btn:active { transform: translateY(0); filter: brightness(.96); }
-    .btn.dirty {
-      border-color: rgba(245, 158, 11, 0.55);
-      box-shadow:
-        0 0 0 4px rgba(245, 158, 11, 0.16),
-        0 6px 18px rgba(245, 158, 11, 0.22);
-      filter: brightness(1.06);
-    }
-    .btn.secondary {
-      background: rgba(18, 16, 28, 0.45);
-      color: rgba(249, 250, 251, 0.90);
-      box-shadow: 0 2px 8px rgba(0,0,0,.12);
-      border: 1px solid var(--border2);
-    }
-    .btn.secondary:hover {
-      background: rgba(18, 16, 28, 0.65);
-      border-color: var(--primary);
-      box-shadow: 0 4px 14px rgba(0,0,0,.18);
-    }
-    .btn.flat {
-      background: var(--surface);
-      color: var(--text);
-      border: 1.5px solid var(--border2);
-      box-shadow: 0 1px 3px rgba(0,0,0,.07);
-    }
-    .btn.flat:hover {
-      background: var(--primary);
-      color: #fff;
-      border-color: var(--primary);
-      box-shadow: 0 2px 8px rgba(0,0,0,.14);
-    }
-    .sidebar-toggle-btn {
-      background: none; border: 1px solid var(--border); border-radius: 10px;
-      cursor: pointer; padding: 7px 10px; color: var(--muted); font-size: 17px;
-      display: flex; align-items: center; justify-content: center; line-height: 1;
-      transition: background .15s, color .15s, border-color .15s;
-      flex-shrink: 0;
-    }
-    .sidebar-toggle-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }
-    /* ── icon action buttons ── */
-    .act-btn {
-      background: none; border: 1px solid transparent; cursor: pointer;
-      padding: 7px; border-radius: 9px; color: var(--muted);
-      display: inline-flex; align-items: center; justify-content: center;
-      transition: background .15s, color .15s, border-color .15s;
-      text-decoration: none; flex-shrink: 0;
-    }
-    .act-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border); }
-    .act-btn.danger:hover { color: #ef4444; border-color: rgba(239,68,68,.3); background: rgba(239,68,68,.07); }
-    .act-btn.primary-hover:hover { color: var(--primary); border-color: rgba(139,92,246,.3); background: rgba(139,92,246,.07); }
-    /* online pill badge (active bot) */
-    .bot-online-pill {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;
-      color: #10b981; background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3);
-      cursor: pointer; transition: background .15s, border-color .15s;
-      white-space: nowrap;
-    }
-    .bot-online-pill:hover { background: rgba(239,68,68,.1); color: #ef4444; border-color: rgba(239,68,68,.3); }
-    .bot-online-pill:hover .pill-dot { background: #ef4444; animation: none; }
-    .pill-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; flex-shrink: 0;
-      box-shadow: 0 0 0 0 rgba(16,185,129,.6); animation: pulse-green 1.8s infinite; }
-    /* ligar bot */
-    .bot-ligar-btn {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;
-      color: var(--muted); background: var(--surface2); border: 1px solid var(--border);
-      cursor: pointer; transition: all .15s; white-space: nowrap;
-    }
-    .bot-ligar-btn:hover { color: #10b981; background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.3); }
-    .bot-ligar-btn:disabled { opacity: .4; cursor: not-allowed; }
-    /* ── toggle-section (collapsible cards) ── */
-    details.toggle-section > summary { list-style:none; display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:14px 0 14px; border-bottom:1px solid var(--border); user-select:none; }
-    details.toggle-section > summary::-webkit-details-marker { display:none; }
-    details.toggle-section > summary .ts-title { font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; }
-    details.toggle-section > summary .ts-arrow { font-size:11px; color:var(--muted); transition:transform .2s; flex-shrink:0; }
-    details.toggle-section[open] > summary .ts-arrow { transform:rotate(90deg); }
-    details.toggle-section > summary .ts-badge { font-size:11px; padding:2px 8px; border-radius:20px; background:var(--surface); border:1px solid var(--border); color:var(--muted); }
-    details.toggle-section > .ts-body { padding-top:14px; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom: 1px solid var(--border); padding: 12px 10px; text-align: left; vertical-align: top; color: var(--text); }
-    th { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 10px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      font-size: 12px;
-      background: rgba(18, 16, 28, 0.45);
-      color: rgba(249, 250, 251, 0.85);
-    }
-    .scrollbox { max-height: 380px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; }
-    .toolbar { display:flex; justify-content: space-between; align-items:center; gap:8px; }
-    .toolbar .small { font-size: 12px; padding: 6px 10px; border-radius: 10px; }
-    .grid2 { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .hero {
-      padding: 20px;
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-      background:
-        radial-gradient(600px 300px at 15% 20%, rgba(139, 92, 246, 0.25), transparent 55%),
-        radial-gradient(600px 300px at 85% 30%, rgba(236, 72, 153, 0.16), transparent 60%),
-        rgba(18, 16, 28, 0.50);
-    }
-    .hero h2 { margin: 0 0 8px; font-size: 18px; }
-    .hero p { margin: 0; color: var(--muted); }
-    .public-wrap { max-width: 520px; margin: 10vh auto; padding: 0 18px; }
-    .active-project-banner {
-      display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;
-      padding:18px 22px; border-radius:var(--radius); margin-bottom:14px;
-      border:1px solid var(--primary); background:linear-gradient(135deg,rgba(139,92,246,.15),rgba(236,72,153,.08));
-      box-shadow:0 0 0 4px rgba(139,92,246,.07);
-    }
-    .active-project-label { font-size:11px; font-weight:600; letter-spacing:.8px; text-transform:uppercase; color:var(--primary); margin-bottom:4px; }
-    .active-project-name { font-size:22px; font-weight:800; color:var(--text); }
-    .active-project-stat { font-size:13px; color:var(--muted); padding:5px 10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; }
-    .badge-active { display:inline-flex; align-items:center; gap:5px; color:#10b981; font-size:12px; font-weight:700; }
-    .badge-active .dot-pulse {
-      width:8px; height:8px; border-radius:999px; background:#10b981; flex-shrink:0;
-      box-shadow:0 0 0 0 rgba(16,185,129,.6);
-      animation:pulse-green 1.8s infinite;
-    }
-    @keyframes pulse-green {
-      0%   { box-shadow:0 0 0 0 rgba(16,185,129,.55); }
-      70%  { box-shadow:0 0 0 7px rgba(16,185,129,0); }
-      100% { box-shadow:0 0 0 0 rgba(16,185,129,0); }
-    }
-    .badge-inactive { display:inline-flex; align-items:center; gap:5px; color:var(--muted); font-size:12px; }
-    .badge-inactive .dot-off { width:8px; height:8px; border-radius:999px; background:var(--muted); opacity:.4; flex-shrink:0; }
-    tr.proj-row-active td { background:rgba(16,185,129,.06); border-bottom-color:rgba(16,185,129,.12); }
-    tr.proj-row-active td:first-child { border-left:3px solid #10b981; padding-left:10px; }
-    /* ── rodando animated dots ── */
-    .rodando-label { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; color:#10b981; }
-    .rodando-label .rdots::after { content:''; animation:rdots 1.4s steps(4,end) infinite; }
-    @keyframes rdots { 0%{content:''} 25%{content:'.'} 50%{content:'..'} 75%{content:'...'} 100%{content:''} }
-    /* ── running bot button ── */
-    .btn-running {
-      background:linear-gradient(135deg,#10b981,#059669);
-      color:#fff; border:none; border-radius:9px;
-      font-size:13px; font-weight:700; padding:8px 18px; cursor:pointer;
-      letter-spacing:.3px;
-      box-shadow:0 0 0 0 rgba(16,185,129,.5);
-      animation:running-pulse 1.6s infinite;
-    }
-    .btn-running:hover {
-      background:linear-gradient(135deg,#ef4444,#dc2626);
-      box-shadow:0 2px 12px rgba(239,68,68,.4);
-      animation:none;
-    }
-    @keyframes running-pulse {
-      0%   { box-shadow:0 0 0 0 rgba(16,185,129,.55); }
-      70%  { box-shadow:0 0 0 9px rgba(16,185,129,0); }
-      100% { box-shadow:0 0 0 0 rgba(16,185,129,0); }
-    }
-    /* ── publishing alert banner ── */
-    .publishing-alert { display:flex; align-items:center; gap:10px; padding:10px 16px; background:rgba(16,185,129,.1); border:1px solid rgba(16,185,129,.3); border-radius:10px; margin-bottom:10px; font-size:13px; font-weight:600; color:#10b981; }
-    .publishing-alert .pal-dot { width:9px; height:9px; border-radius:50%; background:#10b981; flex-shrink:0; animation:pulse-green 1.4s infinite; }
-    /* ── toast notification ── */
-    #posthub-toast { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
-    .ph-toast { background:var(--surface); border:1.5px solid var(--border2); border-radius:12px; padding:12px 18px; font-size:13px; box-shadow:0 4px 20px rgba(0,0,0,.18); pointer-events:all; display:flex; align-items:center; gap:10px; max-width:320px; opacity:0; transform:translateY(12px); transition:opacity .3s,transform .3s; }
-    .ph-toast.show { opacity:1; transform:translateY(0); }
-    .ph-toast.success { border-color:rgba(16,185,129,.4); }
-    .ph-toast.error { border-color:rgba(239,68,68,.4); }
-    .ph-toast .ph-toast-icon { font-size:18px; flex-shrink:0; }
-    /* ── diagnostic modal ── */
-    .diag-overlay {
-      display:none; position:fixed; inset:0; z-index:10000;
-      background:rgba(0,0,0,.55); backdrop-filter:blur(4px);
-      align-items:center; justify-content:center; padding:20px;
-    }
-    .diag-overlay.open { display:flex; }
-    .diag-modal {
-      background:var(--bg2); border:1px solid var(--border);
-      border-radius:20px; box-shadow:0 24px 64px rgba(0,0,0,.38);
-      width:min(520px,100%); max-height:90vh; overflow-y:auto;
-      display:flex; flex-direction:column;
-    }
-    .diag-header {
-      display:flex; align-items:center; justify-content:space-between;
-      padding:18px 22px 14px; border-bottom:1px solid var(--border);
-    }
-    .diag-header h3 { margin:0; font-size:16px; }
-    .diag-close {
-      background:none; border:none; cursor:pointer; color:var(--muted);
-      font-size:20px; padding:4px 8px; border-radius:8px; line-height:1;
-      transition:background .15s, color .15s;
-    }
-    .diag-close:hover { background:var(--surface2); color:var(--text); }
-    .diag-body { padding:18px 22px; display:flex; flex-direction:column; gap:12px; }
-    .diag-item {
-      display:flex; align-items:flex-start; gap:12px;
-      padding:14px 16px; border-radius:14px;
-      border:1px solid var(--border); background:var(--surface2);
-    }
-    .diag-item.ok { border-color:rgba(16,185,129,.35); background:rgba(16,185,129,.07); }
-    .diag-item.err { border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.07); }
-    .diag-item.warn { border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.07); }
-    .diag-item.loading { opacity:.6; }
-    .diag-dot {
-      width:32px; height:32px; border-radius:50%; flex-shrink:0;
-      display:flex; align-items:center; justify-content:center; font-size:15px;
-    }
-    .diag-item.ok .diag-dot { background:rgba(16,185,129,.18); color:#10b981; }
-    .diag-item.err .diag-dot { background:rgba(239,68,68,.15); color:#ef4444; }
-    .diag-item.warn .diag-dot { background:rgba(245,158,11,.15); color:#f59e0b; }
-    .diag-item.loading .diag-dot { background:var(--surface); color:var(--muted); }
-    .diag-label { font-size:13px; font-weight:700; margin-bottom:3px; }
-    .diag-desc { font-size:12px; color:var(--muted); line-height:1.5; }
-    .diag-desc a { color:var(--primary); font-weight:600; }
-    .diag-footer {
-      padding:14px 22px 18px; border-top:1px solid var(--border);
-      display:flex; gap:10px; justify-content:flex-end;
-    }
-    .robot-actions { display:flex; flex-direction:column; gap:8px; }
-    .robot-action-card {
-      display:flex; align-items:center; gap:14px;
-      padding:14px 16px; border-radius:14px;
-      border:1px solid var(--border); background:var(--surface2);
-    }
-    .robot-action-card.robot-action-primary { border-color:var(--primary); background:rgba(139,92,246,.08); }
-    .robot-action-icon {
-      width:38px; height:38px; border-radius:12px; flex-shrink:0;
-      display:grid; place-items:center; font-size:16px;
-      background:rgba(139,92,246,.15); color:var(--primary);
-    }
-    .robot-action-primary .robot-action-icon { background:linear-gradient(135deg,var(--primary),var(--pink)); color:#fff; }
-    .robot-action-title { font-weight:600; font-size:14px; margin-bottom:2px; }
-    .robot-action-desc { font-size:12px; }
-    [data-theme="claro"] tr.proj-row-active td,[data-theme="rosa"] tr.proj-row-active td,[data-theme="ceu"] tr.proj-row-active td,[data-theme="corporativo"] tr.proj-row-active td { background:rgba(16,185,129,.05); }
-    /* ── notification bell ── */
-    .notif-wrap { position:relative; }
-    .notif-bell-btn {
-      position:relative; background:none; border:none; cursor:pointer;
-      width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center;
-      color:var(--muted); transition:background .15s,color .15s;
-    }
-    .notif-bell-btn:hover { background:var(--surface2); color:var(--text); }
-    .notif-badge {
-      position:absolute; top:4px; right:4px;
-      min-width:16px; height:16px; border-radius:999px;
-      background:#ef4444; color:#fff; font-size:9px; font-weight:700;
-      display:none; align-items:center; justify-content:center; padding:0 4px;
-      border:2px solid var(--bg);
-    }
-    .notif-badge.visible { display:flex; }
-    .notif-dropdown {
-      position:absolute; right:0; top:calc(100% + 6px);
-      width:min(340px,calc(100vw - 24px)); max-height:480px;
-      background:var(--bg2); border:1px solid var(--border);
-      border-radius:14px; box-shadow:0 8px 32px rgba(0,0,0,.22);
-      display:none; flex-direction:column; z-index:9999; overflow:hidden;
-    }
-    .notif-dropdown.open { display:flex; }
-    .notif-dd-header {
-      display:flex; align-items:center; justify-content:space-between;
-      padding:12px 16px; border-bottom:1px solid var(--border);
-      font-size:13px; font-weight:600;
-    }
-    .notif-dd-header a { font-size:12px; font-weight:400; color:var(--primary); text-decoration:none; }
-    .notif-dd-header a:hover { text-decoration:underline; }
-    .notif-list { overflow-y:auto; flex:1; }
-    .notif-item {
-      display:flex; align-items:flex-start; gap:10px;
-      padding:11px 16px; border-bottom:1px solid var(--border);
-      cursor:default;
-    }
-    .notif-item:last-child { border-bottom:none; }
-    .notif-icon {
-      width:28px; height:28px; border-radius:50%; flex-shrink:0;
-      display:flex; align-items:center; justify-content:center; font-size:12px;
-    }
-    .notif-icon.ok { background:rgba(16,185,129,.15); color:#10b981; }
-    .notif-icon.err { background:rgba(239,68,68,.12); color:#ef4444; }
-    .notif-item-text { flex:1; min-width:0; }
-    .notif-item-title { font-size:12px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .notif-item-sub { font-size:11px; color:var(--muted); margin-top:2px; }
-    .notif-dd-empty { padding:28px 16px; text-align:center; color:var(--muted); font-size:13px; }
-    @media (max-width: 900px) {
-      .app { grid-template-columns: 1fr !important; }
-      .sidebar { position: relative; height: auto; width: auto !important; border-right: none; border-bottom: 1px solid var(--border); overflow: visible !important; padding: 16px !important; }
-      .app.sidebar-collapsed .sidebar { display: none; }
-      .sidebar-footer { position: relative; left: 0; right: 0; bottom: 0; margin-top: 12px; }
-      .main { padding: 16px; }
-      .grid2 { grid-template-columns: 1fr; }
-    }
-    """
+    return ""
 
 
-def _layout(title: str, body: str, *, user: User | None = None, profile_id: str | None = None, active_tab: str | None = None) -> HTMLResponse:
+def _layout(title: str, body: str, *, user: User | None = None, profile_id: str | None = None, active_tab: str | None = None, active_nav: str | None = None) -> HTMLResponse:
     t = html.escape(title)
     # Steps em ordem lógica de configuração
     _tabs = [
@@ -779,10 +224,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <style>
-    {_base_css()}
-    html, body, input, select, textarea, button {{ font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif; }}
-  </style>
+  <link rel="stylesheet" href="/static/posthub.css?v=2" />
   <script>
     (function(){{
       var t = localStorage.getItem('posthub-theme') || 'roxo';
@@ -792,6 +234,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
 </head>
 <body>
   <div class="app" id="app-root">
+    <div id="phMobBackdrop" onclick="phCloseMobNav()"></div>
     <aside class="sidebar" id="sidebar">
       <img class="brand-logo-wide" src="/brand/logo_posthub.png" alt="PostHub" onerror="this.onerror=null;this.src='/static/logo.svg';" style="margin-bottom:14px;" />
       <div class="brand">
@@ -804,7 +247,15 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       <nav class="nav" style="margin-top:16px">
         <a href="/app/robot"><span class="dot"></span>Robô</a>
         {config_nav}
-        <a href="/app/posts"><span class="dot"></span>Posts</a>
+        <div class="nav-group {'open' if active_nav in ('posts','history') else ''}" id="nav-posts-group">
+          <button class="nav-parent" onclick="this.closest('.nav-group').classList.toggle('open')" style="display:flex;align-items:center;gap:10px">
+            <span class="dot"></span><span style="flex:1;font-size:13px">Posts</span><span class="nav-sub-arrow" style="font-size:9px;transition:transform .2s">&#9654;</span>
+          </button>
+          <div class="nav-sub">
+            <a href="/app/posts" class="{'active' if active_nav=='posts' else ''}"><span style="font-size:9px">&#9654;</span> Pendências</a>
+            <a href="/app/history" class="{'active' if active_nav=='history' else ''}"><span style="font-size:9px">&#9654;</span> Histórico</a>
+          </div>
+        </div>
         <a href="/app/notifications"><span class="dot"></span>Notificações</a>
         <a href="/app/logs"><span class="dot"></span>Logs</a>
       </nav>
@@ -860,7 +311,30 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
               </div>
               <div class="dev-divider"></div>
               <div class="dev-menu-section">
+                <div class="dev-menu-label">&#128266; Som</div>
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;border:1px solid var(--border2);background:var(--surface)">
+                  <span style="font-size:18px;flex-shrink:0">&#128266;</span>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-weight:600;font-size:13px;margin-bottom:2px">Som ao publicar</div>
+                    <select id="ph-success-sound" title="Som ao publicar com sucesso" style="width:100%;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-size:12px;font-weight:500;padding:4px 6px;border-radius:6px;outline:none">
+                      <option value="cash">&#129534; Caixa registradora</option>
+                      <option value="money">&#128176; Dinheiro</option>
+                      <option value="off">&#128263; Sem som</option>
+                    </select>
+                  </div>
+                  <button type="button" id="ph-success-sound-test" title="Testar som" style="width:30px;height:30px;border:none;background:rgba(139,92,246,.15);color:var(--primary);border-radius:8px;padding:0;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">&#9654;</button>
+                </div>
+              </div>
+              <div class="dev-divider"></div>
+              <div class="dev-menu-section">
                 <div class="dev-menu-label">&#128295; Utilidades</div>
+                <button class="dev-action-btn" onclick="phOpenMobPreview()" style="border-color:rgba(139,92,246,.35)">
+                  <span style="font-size:16px">&#128241;</span>
+                  <div>
+                    <div style="font-weight:600">Preview Mobile</div>
+                    <div style="font-size:11px;color:var(--muted)">Visualizar como celular (390/412/768px)</div>
+                  </div>
+                </button>
                 <button class="dev-action-btn" onclick="devLimparCache()">
                   <span style="font-size:16px">&#128260;</span>
                   <div><div style="font-weight:600">Limpar Cache</div><div style="font-size:11px;color:var(--muted)">Recarrega a p&#225;gina ignorando cache</div></div>
@@ -964,6 +438,26 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         location.href = location.pathname + '?_cb=' + Date.now();
       }};
 
+      /* ── Prompt variant tabs ── */
+      window.phSwitchTab = function(iid, dest, num) {{
+        for (var i = 1; i <= 3; i++) {{
+          var panel = document.getElementById('s' + dest + '_' + iid + '_' + i);
+          var btn   = document.getElementById('s' + dest + 'tab_' + iid + '_' + i);
+          if (!panel || !btn) continue;
+          var active = (i === num);
+          panel.style.display = active ? 'block' : 'none';
+          if (active) {{
+            btn.style.background = dest === 'wp' ? 'rgba(139,92,246,.15)' : 'rgba(24,119,242,.12)';
+            btn.style.borderColor = dest === 'wp' ? 'rgba(139,92,246,.35)' : 'rgba(24,119,242,.35)';
+            btn.style.color = 'var(--fg)';
+          }} else {{
+            btn.style.background = 'transparent';
+            btn.style.borderColor = dest === 'wp' ? 'rgba(139,92,246,.15)' : 'rgba(24,119,242,.15)';
+            btn.style.color = 'var(--muted)';
+          }}
+        }}
+      }};
+
       /* ── Placeholders toggle ── */
       function updatePhStatus() {{
         var hidden = localStorage.getItem('ph-hidden') === '1';
@@ -997,6 +491,58 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     }})();
 
     /* ── notification bell ── */
+    /* success sound menu */
+    (function(){{
+      var LS_SOUND = 'ph-success-sound';
+      var sel = document.getElementById('ph-success-sound');
+      var test = document.getElementById('ph-success-sound-test');
+      function soundChoice() {{
+        var v = localStorage.getItem(LS_SOUND) || 'cash';
+        return v === 'coins' ? 'cash' : v;
+      }}
+      function saveChoice(v) {{
+        localStorage.setItem(LS_SOUND, v || 'cash');
+      }}
+      if (sel) {{
+        sel.value = soundChoice();
+        sel.addEventListener('change', function() {{ saveChoice(sel.value); }});
+      }}
+      var SOUND_FILES = {{
+        cash: '/sons/money.m4a',
+        money: '/sons/plim.m4a'
+      }};
+      function playAudioFile(src) {{
+        if (!src) return;
+        try {{
+          var a = new Audio(src);
+          a.preload = 'auto';
+          a.volume = 0.9;
+          var p = a.play();
+          if (p && typeof p.catch === 'function') p.catch(function(){{}});
+        }} catch(e) {{}}
+      }}
+      window._phPlaySuccessSound = function(kind) {{
+        kind = kind || soundChoice();
+        if (kind === 'off') return;
+        playAudioFile(SOUND_FILES[kind] || SOUND_FILES.cash);
+      }};
+      window._phPlayInfoSound = function() {{
+        window._phPlaySuccessSound(soundChoice());
+      }};
+      window._phSoundLabel = function() {{
+        var labels = {{
+          cash: '&#129534; Caixa',
+          money: '&#128176; Dinheiro',
+          off: '&#128263; Sem som'
+        }};
+        return labels[soundChoice()] || labels.cash;
+      }};
+      if (test) test.addEventListener('click', function() {{
+        if (sel) saveChoice(sel.value);
+        window._phPlaySuccessSound(soundChoice());
+      }});
+    }})();
+
     (function(){{
       var _bell   = document.getElementById('notif-bell');
       var _drop   = document.getElementById('notif-dropdown');
@@ -1010,8 +556,33 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       var _lastFeed = [];
 
       function getSettings() {{
-        try {{ return JSON.parse(localStorage.getItem(LS_NOTIF) || '{{"success":true,"error":true}}'); }}
-        catch(e) {{ return {{"success":true,"error":true}}; }}
+        try {{
+          var s = JSON.parse(localStorage.getItem(LS_NOTIF) || '{{"success":true,"error":true,"desktop":false}}');
+          if (typeof s.desktop === 'undefined') s.desktop = false;
+          return s;
+        }}
+        catch(e) {{ return {{"success":true,"error":true,"desktop":false}}; }}
+      }}
+      function saveSettings(s) {{
+        localStorage.setItem(LS_NOTIF, JSON.stringify(s || {{"success":true,"error":true,"desktop":false}}));
+      }}
+      window._phRequestDesktopNotifications = function() {{
+        if (!('Notification' in window)) {{
+          alert('Este navegador nao suporta notificacoes desktop.');
+          return;
+        }}
+        Notification.requestPermission().then(function(permission) {{
+          var s = getSettings();
+          s.desktop = permission === 'granted';
+          saveSettings(s);
+          var cb = document.getElementById('ns-desktop');
+          if (cb) cb.checked = s.desktop;
+          if (permission === 'granted') {{
+            try {{ new Notification('PostHUB', {{ body: 'Notificacoes desktop ativadas.' }}); }} catch(e) {{}}
+          }} else {{
+            alert('Permissao nao concedida. Ative as notificacoes do site no navegador.');
+          }}
+        }});
       }}
 
       function _renderDrop(items) {{
@@ -1032,16 +603,19 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
             : '';
           var errLine = '';
           if (n.type === 'error' && n.error_label) {{
-            var fixPart = n.fix_url
-              ? '<a href="' + _esc(n.fix_url) + '" style="display:inline-block;margin-top:5px;font-size:11px;font-weight:700;color:#fff;background:#ef4444;border-radius:6px;padding:3px 10px;text-decoration:none">→ Corrigir</a>'
-              : '';
+            var actionPart = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">'
+              + '<form method="post" action="/app/notifications/' + encodeURIComponent(n.id) + '/complete" style="margin:0">'
+              + '<button type="submit" style="font-size:11px;font-weight:700;color:#fff;background:#10b981;border:0;border-radius:6px;padding:4px 9px;cursor:pointer">Marcar concluida</button></form>'
+              + '<form method="post" action="/app/notifications/' + encodeURIComponent(n.id) + '/delete" style="margin:0">'
+              + '<button type="submit" style="font-size:11px;font-weight:700;color:#ef4444;background:transparent;border:1px solid rgba(239,68,68,.35);border-radius:6px;padding:3px 9px;cursor:pointer">Excluir</button></form>'
+              + '</div>';
             var fixText = n.fix
               ? '<div style="font-size:11px;color:var(--muted,#888);margin-top:3px;line-height:1.5">' + _esc(n.fix) + '</div>'
               : '';
             errLine = '<div style="margin-top:5px;padding:8px 10px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.18);border-radius:8px">'
               + '<div style="font-size:11px;color:#ef4444;font-weight:700">⚠ ' + _esc(n.error_label) + '</div>'
               + fixText
-              + fixPart
+              + actionPart
               + '</div>';
           }}
           return '<div class="notif-item">' + icon +
@@ -1079,11 +653,59 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         _badge.classList.remove('visible');
       }}
 
+      var LS_SOUND_LAST = 'ph-success-sound-last-id';
+      function _maybePlaySuccess(items) {{
+        var s = getSettings();
+        if (!s.success) return;
+        var latest = (items || []).find(function(n) {{ return n.type === 'success'; }});
+        if (!latest) return;
+        var last = localStorage.getItem(LS_SOUND_LAST) || '';
+        if (!last) {{
+          localStorage.setItem(LS_SOUND_LAST, latest.id);
+          return;
+        }}
+        if (latest.id !== last) {{
+          localStorage.setItem(LS_SOUND_LAST, latest.id);
+          var recent = !latest.ts_ms || (Date.now() - Number(latest.ts_ms)) < 10 * 60 * 1000;
+          if (recent && typeof window._phPlaySuccessSound === 'function') window._phPlaySuccessSound();
+        }}
+      }}
+
+      var LS_DESKTOP_LAST = 'ph-desktop-notif-last-id';
+      function _maybeDesktopNotify(items) {{
+        var s = getSettings();
+        if (!s.desktop || !('Notification' in window) || Notification.permission !== 'granted') return;
+        var latest = (items || []).find(function(n) {{
+          return (n.type === 'success' && s.success) || (n.type === 'error' && s.error);
+        }});
+        if (!latest) return;
+        var last = localStorage.getItem(LS_DESKTOP_LAST) || '';
+        if (!last) {{
+          localStorage.setItem(LS_DESKTOP_LAST, latest.id);
+          return;
+        }}
+        if (latest.id === last) return;
+        localStorage.setItem(LS_DESKTOP_LAST, latest.id);
+        var recent = !latest.ts_ms || (Date.now() - Number(latest.ts_ms)) < 10 * 60 * 1000;
+        if (!recent) return;
+        try {{
+          var title = latest.type === 'error' ? 'PostHUB - Falha na postagem' : 'PostHUB - Post publicado';
+          var body = (latest.title || 'Sem titulo') + (latest.bot ? ' - ' + latest.bot : '');
+          var n = new Notification(title, {{ body: body, tag: 'posthub-' + latest.id, renotify: true }});
+          n.onclick = function() {{
+            try {{ window.focus(); }} catch(e) {{}}
+            window.location.href = '/app/notifications';
+          }};
+        }} catch(e) {{}}
+      }}
+
       function _fetchFeed() {{
         fetch('/app/notifications/feed')
           .then(function(r){{ return r.ok ? r.json() : []; }})
           .then(function(data) {{
             _lastFeed = data || [];
+            _maybePlaySuccess(_lastFeed);
+            _maybeDesktopNotify(_lastFeed);
             _updateBadge(_lastFeed);
             if (_open) _renderDrop(_lastFeed);
           }})
@@ -1257,12 +879,28 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       function toggleSidebar() {{
         var app = document.getElementById('app-root');
         if (!app) return;
+        if (document.body.classList.contains('ph-mob-active') || window.innerWidth <= 900) {{
+          app.classList.toggle('mob-nav-open');
+          return;
+        }}
         var collapsed = app.classList.toggle('sidebar-collapsed');
         localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '0');
         var btn = document.getElementById('sidebar-toggle-btn');
         if (btn) btn.title = collapsed ? 'Mostrar barra lateral' : 'Ocultar barra lateral';
       }}
       window.toggleSidebar = toggleSidebar;
+      window.phCloseMobNav = function() {{
+        var app = document.getElementById('app-root');
+        if (app) app.classList.remove('mob-nav-open');
+      }};
+      /* Fecha drawer ao clicar em link de nav no mobile */
+      document.addEventListener('click', function(e) {{
+        if (window.innerWidth > 900 && !document.body.classList.contains('ph-mob-active')) return;
+        if (e.target.closest('.nav a, .nav-sub a')) {{
+          var app = document.getElementById('app-root');
+          if (app) app.classList.remove('mob-nav-open');
+        }}
+      }});
       if (localStorage.getItem('sidebar-collapsed') === '1') {{
         var app = document.getElementById('app-root');
         if (app) app.classList.add('sidebar-collapsed');
@@ -1297,6 +935,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       var inp = document.getElementById('diagBotIdInput');
       if (inp) inp.value = botId || '';
       overlay.classList.add('open');
+      if (typeof window._phPlayInfoSound === 'function') window._phPlayInfoSound();
       var loadingHtml = '<div style="text-align:center;padding:32px;color:var(--muted)">'
         + '<div style="font-size:28px;margin-bottom:8px">&#9203;</div>'
         + 'Verificando configura&#231;&#245;es...</div>';
@@ -1325,6 +964,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
             out += '</div></div></div>';
           }});
           document.getElementById('diagItems').innerHTML = out || '<div style="padding:20px;text-align:center;color:var(--muted)">Nenhum resultado.</div>';
+          var snd = (typeof window._phSoundLabel === 'function') ? window._phSoundLabel() : '&#129534; Caixa';
           if (data.summary) {{
             var s = data.summary;
             var intText = s.interval_minutes > 0 ? s.interval_minutes + ' min entre posts' : 'sem intervalo';
@@ -1336,6 +976,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
             sm += '<div><span style="color:var(--muted)">Intervalo:</span> <b>' + intText + '</b></div>';
             sm += '<div><span style="color:var(--muted)">Fontes:</span> <b>' + s.sources_count + ' configurada' + (s.sources_count !== 1 ? 's' : '') + '</b></div>';
             sm += '<div><span style="color:var(--muted)">Tipos:</span> <b>' + srcTypes + '</b></div>';
+            sm += '<div><span style="color:var(--muted)">Som:</span> <b>' + snd + '</b></div>';
             if (s.wp_url) sm += '<div style="grid-column:1/-1"><span style="color:var(--muted)">Site WordPress:</span> <b>' + s.wp_url + '</b></div>';
             sm += '</div></div>';
             document.getElementById('diagItems').innerHTML += sm;
@@ -1355,7 +996,62 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           document.getElementById('diagFooter').innerHTML = '<button type="button" class="btn secondary" onclick="closeDiagModal()">Fechar</button>';
         }});
     }}
+
+    // ── Mobile Preview ────────────────────────────────────────────────────────
+    (function(){{
+      var SIZES = [390, 412, 768];
+      var LABELS = {{390:'iPhone 390', 412:'Pixel 412', 768:'iPad 768'}};
+
+      function setWidth(w) {{
+        localStorage.setItem('ph-mob-w', w);
+        var root = document.getElementById('app-root');
+        if (root) {{ root.style.width = w + 'px'; root.style.minWidth = w + 'px'; root.style.maxWidth = w + 'px'; }}
+        SIZES.forEach(function(s) {{
+          var b = document.getElementById('phMobBtn_' + s);
+          if (b) b.classList.toggle('pmb-active', s === w);
+        }});
+      }}
+
+      window.phOpenMobPreview = function() {{
+        document.body.classList.add('ph-mob-active');
+        localStorage.setItem('ph-mob-active', '1');
+        var w = parseInt(localStorage.getItem('ph-mob-w') || '390', 10);
+        setWidth(w);
+        // close dev menu
+        var dd = document.getElementById('devMenuDd');
+        if (dd) dd.classList.remove('open');
+        var btn = document.getElementById('devMenuBtn');
+        if (btn) btn.classList.remove('open');
+      }};
+      window.phCloseMobPreview = function() {{
+        document.body.classList.remove('ph-mob-active');
+        localStorage.removeItem('ph-mob-active');
+        var root = document.getElementById('app-root');
+        if (root) {{ root.style.width = ''; root.style.minWidth = ''; root.style.maxWidth = ''; root.classList.remove('mob-nav-open'); }}
+      }};
+      window.phMobSetW = function(w) {{ setWidth(w); }};
+
+      // Restore on load
+      if (localStorage.getItem('ph-mob-active') === '1') {{
+        document.body.classList.add('ph-mob-active');
+        var _w = parseInt(localStorage.getItem('ph-mob-w') || '390', 10);
+        // defer until DOM ready
+        document.addEventListener('DOMContentLoaded', function() {{ setWidth(_w); }});
+      }}
+      document.addEventListener('keydown', function(e) {{
+        if (e.key === 'Escape' && document.body.classList.contains('ph-mob-active')) phCloseMobPreview();
+      }});
+    }})();
   </script>
+
+  <!-- Mobile Preview Bar (fixed, shows when ph-mob-active) -->
+  <div id="phMobBar">
+    <span style="font-size:12px;font-weight:700;color:#a78bfa;margin-right:4px">&#128241; Mobile Preview</span>
+    <button class="ph-mob-size-btn pmb-active" id="phMobBtn_390" onclick="phMobSetW(390)">iPhone 390px</button>
+    <button class="ph-mob-size-btn" id="phMobBtn_412" onclick="phMobSetW(412)">Pixel 412px</button>
+    <button class="ph-mob-size-btn" id="phMobBtn_768" onclick="phMobSetW(768)">iPad 768px</button>
+    <button class="ph-mob-close-btn" onclick="phCloseMobPreview()">&#10005; Sair do Preview</button>
+  </div>
 </body>
 </html>"""
     # Strip surrogate characters that can come from DB emoji/JSON fields
@@ -1453,6 +1149,8 @@ def _get_or_create_single_bot(db, *, user: User) -> AutomationProfile:
         .limit(1)
     )
     if bot:
+        if _ensure_publish_config_defaults(db, bot=bot):
+            db.commit()
         return bot
     # Nenhum ativo — retorna o primeiro sem forçar ativação
     bot = db.scalar(
@@ -1462,17 +1160,36 @@ def _get_or_create_single_bot(db, *, user: User) -> AutomationProfile:
         .limit(1)
     )
     if bot:
+        if _ensure_publish_config_defaults(db, bot=bot):
+            db.commit()
         return bot
     # Nenhum perfil — cria o primeiro
     bot = AutomationProfile(
         user_id=uid, name="Meu Primeiro Robô", active=True,
         schedule_config_json={"posts_per_day": 15, "interval_minutes": 60},
         anti_block_config_json={},
-        publish_config_json={"facebook_link": "comments", "default_category": "Receitas", "categories": DEFAULT_RECIPE_CATEGORIES},
+        publish_config_json={"facebook_link": "comments", "default_category": "Receitas", "categories": list(DEFAULT_RECIPE_CATEGORIES)},
     )
     db.add(bot); db.commit(); db.refresh(bot)
     _ensure_default_recipe_actions(db, bot=bot)
     return bot
+
+
+def _parse_prompt_variants(prompt_text: str) -> tuple[str, str, str, str]:
+    """Parse prompt_text into (v1, v2, v3, mode). Handles plain string (legacy) and JSON."""
+    text = (prompt_text or "").strip()
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+            variants = data.get("v") or []
+            mode = str(data.get("mode") or "1")
+            v1 = str(variants[0]).strip() if len(variants) > 0 else ""
+            v2 = str(variants[1]).strip() if len(variants) > 1 else ""
+            v3 = str(variants[2]).strip() if len(variants) > 2 else ""
+            return v1, v2, v3, mode
+        except Exception:
+            pass
+    return text, "", "", "1"
 
 
 def _ensure_default_recipe_actions(db, *, bot: AutomationProfile) -> None:
@@ -1980,6 +1697,8 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
         .where(AutomationProfile.user_id == user.id)
         .order_by(AutomationProfile.created_at.asc())
     ))
+    if any(_ensure_publish_config_defaults(db, bot=pr) for pr in all_profiles):
+        db.commit()
     # Se não há nenhum bot, mostra tela de estado vazio
     if not all_profiles:
         empty_body = _NEW_BOT_WIZARD_HTML + f"""
@@ -2239,7 +1958,8 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
                 continue
             _qj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status == JobStatus.queued)) or 0)
             _rj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status == JobStatus.running)) or 0)
-            _ip = (_qj + _rj) > 0  # running = only active jobs, not pending posts
+            _pp = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _pr.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
+            _ip = (_qj + _rj + _pp) > 0
             _pr_emoji = _safe((_pr.publish_config_json or {}).get("emoji") or "🤖")
             _pr_name_esc = html.escape(_pr.name)
             _pr_id = _pr.id
@@ -2272,7 +1992,10 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
                                 f"<div style='flex-shrink:0'>{_card_btn}</div></div>")
 
         _any_running = any(
-            (int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status.in_([JobStatus.queued, JobStatus.running]))) or 0)) > 0
+            (
+                int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == _pr.id, Job.status.in_([JobStatus.queued, JobStatus.running]))) or 0)
+                + int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == _pr.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
+            ) > 0
             for _pr in all_profiles if _pr.active
         )
         _pub_alert = ""
@@ -2566,6 +2289,58 @@ def _try_reconnect_wordpress(db, integ: Integration, *, base_url: str, active_us
     return result
 
 
+def _revive_profile_queue(db, *, profile_id: str) -> int:
+    now = datetime.utcnow()
+    did = 0
+    stuck_cutoff = now - timedelta(minutes=5)
+    did += int(db.execute(
+        update(Job).where(
+            Job.profile_id == profile_id,
+            Job.status == JobStatus.running,
+            Job.locked_at < stuck_cutoff,
+        ).values(status=JobStatus.queued, run_at=now, locked_at=None, locked_by=None, updated_at=now)
+    ).rowcount or 0)
+
+    pipeline = [JOB_CLEAN, JOB_AI, JOB_MEDIA, JOB_PUBLISH_WP]
+    orphan_posts = list(db.scalars(
+        select(Post).where(
+            Post.profile_id == profile_id,
+            Post.status.in_([PostStatus.pending, PostStatus.processing]),
+        )
+    ))
+    for p in orphan_posts:
+        active = int(db.scalar(
+            select(func.count()).select_from(Job).where(
+                Job.post_id == p.id,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )
+        ) or 0)
+        if active:
+            continue
+        last_ok_type = db.scalar(
+            select(Job.type).where(Job.post_id == p.id, Job.status == JobStatus.succeeded)
+            .order_by(Job.updated_at.desc()).limit(1)
+        )
+        if last_ok_type in pipeline:
+            idx = pipeline.index(last_ok_type)
+            next_job = pipeline[idx + 1] if idx + 1 < len(pipeline) else JOB_PUBLISH_WP
+        else:
+            next_job = JOB_CLEAN
+        p.status = PostStatus.pending
+        p.updated_at = now
+        db.add(p)
+        enqueue_job(
+            db,
+            user_id=p.user_id,
+            profile_id=p.profile_id,
+            post_id=p.id,
+            job_type=next_job,
+            payload={"collected_content_id": p.collected_content_id},
+        )
+        did += 1
+    return did
+
+
 @router.post("/app/robot/start", include_in_schema=False)
 def robot_start(
     bot_id: str = Form(default=None),
@@ -2599,16 +2374,27 @@ def robot_start(
         db.commit()
         return RedirectResponse(f"/app/robot?msg={quote_plus(msg)}", status_code=status.HTTP_302_FOUND)
 
+    bot.active = True
+    _ensure_publish_config_defaults(db, bot=bot)
+    db.add(bot)
+    revived = _revive_profile_queue(db, profile_id=bot.id)
     queued_jobs = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued)) or 0)
     running_jobs = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.running)) or 0)
     pending_posts = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == bot.id, Post.status == PostStatus.pending)) or 0)
     processing_posts = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == bot.id, Post.status == PostStatus.processing)) or 0)
     if (queued_jobs + running_jobs + pending_posts + processing_posts) > 0:
-        return RedirectResponse("/app/robot?msg=Postagens+em+andamento.+Aguarde+terminar+a+fila+atual+para+iniciar+de+novo.", status_code=status.HTTP_302_FOUND)
+        db.commit()
+        msg = "Fila retomada e em andamento." if revived else "Postagens em andamento. Acompanhe em Posts."
+        return RedirectResponse(f"/app/posts?msg={quote_plus(msg)}", status_code=status.HTTP_302_FOUND)
     cfg = bot.schedule_config_json or {}
     limit = int(cfg.get("posts_per_day") or 15)
     respect = int(cfg.get("respect_schedule") or 0) == 1
-    interval_minutes = int(cfg.get("interval_minutes") or 0) if respect else 0
+    interval_minutes = int(cfg.get("interval_minutes") or 0)  # always apply, regardless of respect_schedule
+    # Clear all existing posts so the bot counts from zero on this new run.
+    # keep_collected=True preserves URL fingerprints so the collector never re-posts the same article.
+    _all_post_ids = list(db.scalars(select(Post.id).where(Post.profile_id == bot.id)))
+    if _all_post_ids:
+        _delete_posts(db, profile_id=bot.id, post_ids=[str(x) for x in _all_post_ids], keep_collected=True)
     enqueue_job(
         db,
         user_id=bot.user_id,
@@ -2700,16 +2486,168 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
         results.append({"key": "sources", "status": "ok", "label": f"{len(sources)} fonte{'s' if len(sources)!=1 else ''} configurada{'s' if len(sources)!=1 else ''}",
                          "desc": ", ".join(f"<b>{html.escape(s.value[:40])}</b>" for s in sources[:3]) + ("..." if len(sources) > 3 else "")})
 
-    # ── 3. Gemini ───────────────────────────────────────────────
+    # ── 3. IA (Gemini / OpenAI) ──────────────────────────────────
     gem = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.GEMINI))
-    if not gem:
-        results.append({"key": "gemini", "status": "warn", "label": "Gemini não configurado",
-                         "desc": "Sem IA configurada os posts não serão reescritos.",
-                         "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → Gemini</a> e adicione sua API Key gratuita."})
-    else:
+    oai = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.OPENAI))
+    gem_ok = False
+    oai_ok = False
+    if gem:
+        try:
+            _gcreds = decrypt_json(gem.credentials_encrypted)
+            gem_ok = bool(str(_gcreds.get("api_key") or "").strip())
+        except Exception:
+            pass
+    if oai:
+        try:
+            _ocreds = decrypt_json(oai.credentials_encrypted)
+            oai_ok = bool(str(_ocreds.get("api_key") or "").strip())
+        except Exception:
+            pass
+    if gem_ok and oai_ok:
+        results.append({"key": "gemini", "status": "ok",
+                         "label": "Gemini + ChatGPT configurados",
+                         "desc": "Gemini é a IA principal. Se falhar, o ChatGPT assume automaticamente como fallback."})
+    elif gem_ok:
         results.append({"key": "gemini", "status": "ok", "label": "Gemini configurado", "desc": "IA pronta para reescrever os posts."})
+    elif oai_ok:
+        results.append({"key": "gemini", "status": "ok", "label": "ChatGPT configurado", "desc": "ChatGPT será usado para reescrever os posts."})
+    else:
+        results.append({"key": "gemini", "status": "warn", "label": "Nenhuma IA configurada",
+                         "desc": "Sem IA os posts não serão reescritos.",
+                         "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações</a> e adicione Gemini ou ChatGPT."})
 
-    can_start = all(r["status"] != "err" for r in results)
+    # ── 4. Prompt IA ────────────────────────────────────────────
+    _ensure_default_recipe_actions(db, bot=bot)
+    _site_action_diag = db.scalar(
+        select(AiAction)
+        .where(AiAction.profile_id == bot.id, AiAction.destination == ActionDestination.WORDPRESS)
+        .order_by(AiAction.created_at.asc()).limit(1)
+    )
+    _fb_action_diag = db.scalar(
+        select(AiAction)
+        .where(AiAction.profile_id == bot.id, AiAction.destination == ActionDestination.FACEBOOK)
+        .order_by(AiAction.created_at.asc()).limit(1)
+    )
+    _sv1d, _sv2d, _sv3d, _smodd = _parse_prompt_variants(_site_action_diag.prompt_text if _site_action_diag else "")
+    _fv1d, _fv2d, _fv3d, _fmodd = _parse_prompt_variants(_fb_action_diag.prompt_text if _fb_action_diag else "")
+    _mode_name = {"1": "Prompt 1", "2": "Prompt 2", "3": "Prompt 3", "random": "🎲 Aleatório"}
+    _site_variants_filled = [v for v in [_sv1d, _sv2d, _sv3d] if v.strip()]
+    _fb_variants_filled   = [v for v in [_fv1d, _fv2d, _fv3d] if v.strip()]
+
+    if not _sv1d.strip():
+        results.append({"key": "prompt_site", "status": "warn",
+                         "label": "Prompt WordPress não configurado",
+                         "desc": "O bot vai usar um prompt genérico padrão.",
+                         "fix": f"Configure um prompt em <a href='/app/profiles/{bot.id}?tab=ia'>IA → Prompts → WordPress</a>."})
+    else:
+        if _smodd == "random":
+            _pcount = len(_site_variants_filled)
+            _preview = html.escape((_site_variants_filled[0])[:90]) + ("…" if len(_site_variants_filled[0]) > 90 else "")
+            results.append({"key": "prompt_site", "status": "ok",
+                             "label": f"Prompt WordPress: 🎲 Aleatório ({_pcount} variante{'s' if _pcount != 1 else ''})",
+                             "desc": f"O bot vai sortear um dos {_pcount} prompts a cada post.<br><small style='opacity:.7'>Ex: «{_preview}»</small>"})
+        else:
+            _idx = int(_smodd) - 1
+            _chosen = _site_variants_filled[_idx] if _idx < len(_site_variants_filled) else _sv1d
+            _preview = html.escape(_chosen[:90]) + ("…" if len(_chosen) > 90 else "")
+            results.append({"key": "prompt_site", "status": "ok",
+                             "label": f"Prompt WordPress: {_mode_name.get(_smodd, 'Prompt 1')}",
+                             "desc": f"«{_preview}»"})
+
+    if not _fv1d.strip():
+        results.append({"key": "prompt_fb", "status": "warn",
+                         "label": "Prompt Facebook não configurado",
+                         "desc": "O bot vai usar um prompt genérico padrão.",
+                         "fix": f"Configure em <a href='/app/profiles/{bot.id}?tab=ia'>IA → Prompts → Facebook</a>."})
+    else:
+        if _fmodd == "random":
+            _pcount = len(_fb_variants_filled)
+            _preview = html.escape((_fb_variants_filled[0])[:90]) + ("…" if len(_fb_variants_filled[0]) > 90 else "")
+            results.append({"key": "prompt_fb", "status": "ok",
+                             "label": f"Prompt Facebook: 🎲 Aleatório ({_pcount} variante{'s' if _pcount != 1 else ''})",
+                             "desc": f"O bot vai sortear um dos {_pcount} prompts a cada post.<br><small style='opacity:.7'>Ex: «{_preview}»</small>"})
+        else:
+            _idx = int(_fmodd) - 1
+            _chosen = _fb_variants_filled[_idx] if _idx < len(_fb_variants_filled) else _fv1d
+            _preview = html.escape(_chosen[:90]) + ("…" if len(_chosen) > 90 else "")
+            results.append({"key": "prompt_fb", "status": "ok",
+                             "label": f"Prompt Facebook: {_mode_name.get(_fmodd, 'Prompt 1')}",
+                             "desc": f"«{_preview}»"})
+
+    # ── 5. Facebook ──────────────────────────────────────────────
+    publish_cfg_diag = bot.publish_config_json or {}
+    fb_enabled_diag = bool(publish_cfg_diag.get("facebook_enabled"))
+    fb_integ_diag = db.scalar(select(Integration).where(Integration.profile_id == bot.id, Integration.type == IntegrationType.FACEBOOK))
+    fb_pages_diag: list[dict] = []
+    if fb_integ_diag:
+        try:
+            _fbc = decrypt_json(fb_integ_diag.credentials_encrypted)
+            fb_pages_diag = [x for x in (_fbc.get("pages") or []) if isinstance(x, dict) and x.get("page_id")]
+        except Exception:
+            pass
+    fb_selected_diag = [str(x) for x in (publish_cfg_diag.get("facebook_page_ids") or []) if str(x).strip()]
+
+    if not fb_enabled_diag:
+        results.append({
+            "key": "facebook", "status": "info",
+            "label": "Facebook desativado",
+            "desc": "O bot não vai publicar no Facebook nesta rodada. Ative em <a href='/app/profiles/{bid}?tab=publicacao&ptab=facebook'>Publicação → Facebook</a>.".replace("{bid}", bot.id),
+        })
+    elif not fb_pages_diag:
+        results.append({
+            "key": "facebook", "status": "warn",
+            "label": "Facebook ativado mas sem páginas",
+            "desc": "Nenhuma página do Facebook cadastrada.",
+            "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes&itab=facebook'>Integrações → Facebook</a> e adicione ao menos uma página.",
+        })
+    elif not fb_selected_diag:
+        results.append({
+            "key": "facebook", "status": "warn",
+            "label": "Facebook ativado mas nenhuma página selecionada",
+            "desc": f"{len(fb_pages_diag)} página(s) cadastrada(s), mas nenhuma selecionada para publicar.",
+            "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=publicacao&ptab=facebook'>Publicação → Facebook</a> e marque as páginas desejadas.",
+        })
+    else:
+        # Quick token validation for selected pages (best-effort, no hard block)
+        from app.services.facebook import test_page_token as _test_fb_token
+        valid_pages, invalid_pages = [], []
+        for _pg in fb_pages_diag:
+            _pid = str(_pg.get("page_id") or "")
+            _tok = str(_pg.get("access_token") or "")
+            if _pid not in fb_selected_diag:
+                continue
+            if not _tok:
+                invalid_pages.append(_pg.get("name") or _pid)
+                continue
+            _tres = _test_fb_token(page_id=_pid, page_access_token=_tok)
+            if _tres.get("ok"):
+                valid_pages.append(_tres.get("name") or _pg.get("name") or _pid)
+            else:
+                invalid_pages.append((_pg.get("name") or _pid) + f" ({_tres.get('error','')[:60]})")
+        if invalid_pages and not valid_pages:
+            results.append({
+                "key": "facebook", "status": "err",
+                "label": "Token(s) do Facebook inválido(s)",
+                "desc": f"Falha ao validar: {', '.join(invalid_pages[:3])}.",
+                "fix": f"Gere novos tokens em <a href='/app/profiles/{bot.id}?tab=integracoes&itab=facebook'>Integrações → Facebook</a>.",
+            })
+        elif invalid_pages:
+            results.append({
+                "key": "facebook", "status": "warn",
+                "label": f"Facebook parcialmente OK ({len(valid_pages)} de {len(valid_pages)+len(invalid_pages)} páginas)",
+                "desc": f"Páginas OK: {', '.join(valid_pages[:2])}. Com erro: {', '.join(invalid_pages[:2])}.",
+                "fix": f"Renove os tokens das páginas com erro em <a href='/app/profiles/{bot.id}?tab=integracoes&itab=facebook'>Integrações → Facebook</a>.",
+            })
+        else:
+            fb_image_mode = str(publish_cfg_diag.get("facebook_image") or "link_preview")
+            img_label = {"link_preview": "preview do link WP", "direct_photo": "imagem direta", "none": "sem imagem"}.get(fb_image_mode, fb_image_mode)
+            results.append({
+                "key": "facebook", "status": "ok",
+                "label": f"Facebook OK — {len(valid_pages)} página(s) pronta(s)",
+                "desc": f"Páginas: {', '.join(valid_pages[:3])}{'...' if len(valid_pages)>3 else ''}. Imagem: {img_label}.",
+            })
+
+    can_start = all(r["status"] not in ("err",) for r in results)
     can_reconnect_start = bool(
         wp_can_reconnect
         and not can_start
@@ -2749,15 +2687,16 @@ def robot_stop(bot_id: str = Form(default=None), user: User = Depends(get_curren
         bot = _get_or_create_single_bot(db, user=user)
     if not bot:
         return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
+    ids = list(db.scalars(select(Post.id).where(
+        Post.profile_id == bot.id,
+        Post.status.in_([PostStatus.pending, PostStatus.processing]),
+    )))
+    if ids:
+        _cancel_posts(db, profile_id=bot.id, post_ids=[str(x) for x in ids], user=user)
     db.execute(
         update(Job)
         .where(Job.profile_id == bot.id, or_(Job.status == JobStatus.queued, Job.status == JobStatus.running))
-        .values(status=JobStatus.failed, last_error="Parado manualmente pelo usu\u00e1rio")
-    )
-    db.execute(
-        update(Post)
-        .where(Post.profile_id == bot.id, Post.status == PostStatus.processing)
-        .values(status=PostStatus.pending)
+        .values(status=JobStatus.failed, last_error="canceled_by_user", locked_at=None, locked_by=None, updated_at=datetime.utcnow())
     )
     db.commit()
     return RedirectResponse(f"/app/robot?msg={quote_plus('Robô parado com sucesso.')}", status_code=status.HTTP_302_FOUND)
@@ -2770,7 +2709,8 @@ def robot_status(user: User = Depends(get_current_user), db=Depends(get_db)):
     result = []
     for p in profiles:
         qj = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == p.id, Job.status.in_([JobStatus.queued, JobStatus.running]))) or 0)
-        result.append({"id": p.id, "name": p.name, "is_running": qj > 0})
+        pp = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == p.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
+        result.append({"id": p.id, "name": p.name, "is_running": (qj + pp) > 0})
     return _JSONResponse(result)
 
 
@@ -3002,7 +2942,14 @@ def profiles_page(user: User = Depends(get_current_user), db=Depends(get_db)):
 
 @router.post("/app/profiles/create", include_in_schema=False)
 def profiles_create(name: str = Form(...), active: str = Form("1"), user: User = Depends(get_current_user), db=Depends(get_db)):
-    p = AutomationProfile(user_id=user.id, name=name.strip(), active=(active == "1"), schedule_config_json={}, anti_block_config_json={})
+    p = AutomationProfile(
+        user_id=user.id,
+        name=name.strip(),
+        active=(active == "1"),
+        schedule_config_json={},
+        anti_block_config_json={},
+        publish_config_json={"facebook_link": "comments", "default_category": "Receitas", "categories": list(DEFAULT_RECIPE_CATEGORIES)},
+    )
     db.add(p)
     db.commit()
     return RedirectResponse("/app/profiles", status_code=status.HTTP_302_FOUND)
@@ -3021,7 +2968,19 @@ def profiles_create_wizard(
     db=Depends(get_db),
 ):
     safe_emoji = (emoji or "🤖").strip() or "🤖"
-    p = AutomationProfile(user_id=user.id, name=name.strip(), active=True, schedule_config_json={}, anti_block_config_json={}, publish_config_json={"emoji": safe_emoji})
+    p = AutomationProfile(
+        user_id=user.id,
+        name=name.strip(),
+        active=True,
+        schedule_config_json={},
+        anti_block_config_json={},
+        publish_config_json={
+            "emoji": safe_emoji,
+            "facebook_link": "comments",
+            "default_category": "Receitas",
+            "categories": list(DEFAULT_RECIPE_CATEGORIES),
+        },
+    )
     db.add(p)
     db.flush()
 
@@ -3047,6 +3006,8 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     _ensure_default_recipe_actions(db, bot=p)
+    if _ensure_publish_config_defaults(db, bot=p):
+        db.commit()
     tab = (request.query_params.get("tab") or "integracoes").strip().lower()
     tabs = [
         ("integracoes", "Integrações"),
@@ -3295,6 +3256,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         _pub_interval_min  = int(_pub_sched_cfg.get("interval_minutes") or 0)
         fb_link_place = str(publish_cfg.get("facebook_link", "comments"))
         fb_enabled = bool(publish_cfg.get("facebook_enabled"))
+        fb_image_mode = str(publish_cfg.get("facebook_image") or "link_preview")
         fb_selected = publish_cfg.get("facebook_page_ids") or []
         fb_selected_ids = (
             {str(x).strip() for x in fb_selected if str(x).strip()} if isinstance(fb_selected, list) else set()
@@ -3459,6 +3421,25 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                   </label>
                 </div>
               </div>
+              <!-- Image mode -->
+              <div class="card" style="margin-bottom:18px;padding:18px 22px">
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">Imagem no post do Facebook</div>
+                <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Como a imagem do artigo deve aparecer no post</div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                  <label style="flex:1;min-width:160px;display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid {'rgba(24,119,242,.5)' if fb_image_mode=='link_preview' else 'var(--border2)'};border-radius:10px;cursor:pointer;background:{'rgba(24,119,242,.06)' if fb_image_mode=='link_preview' else 'transparent'}">
+                    <input type="radio" name="facebook_image" value="link_preview" {"checked" if fb_image_mode == "link_preview" else ""} style="width:16px;height:16px" />
+                    <div><div style="font-weight:600;font-size:13px">&#128279; Preview do link</div><div style="font-size:11px;color:var(--muted)">Facebook gera o preview automaticamente a partir do link do artigo</div></div>
+                  </label>
+                  <label style="flex:1;min-width:160px;display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid {'rgba(24,119,242,.5)' if fb_image_mode=='direct_photo' else 'var(--border2)'};border-radius:10px;cursor:pointer;background:{'rgba(24,119,242,.06)' if fb_image_mode=='direct_photo' else 'transparent'}">
+                    <input type="radio" name="facebook_image" value="direct_photo" {"checked" if fb_image_mode == "direct_photo" else ""} style="width:16px;height:16px" />
+                    <div><div style="font-weight:600;font-size:13px">&#128247; Imagem direta</div><div style="font-size:11px;color:var(--muted)">Faz upload da imagem do artigo diretamente (foto com legenda)</div></div>
+                  </label>
+                  <label style="flex:1;min-width:160px;display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid {'rgba(24,119,242,.5)' if fb_image_mode=='none' else 'var(--border2)'};border-radius:10px;cursor:pointer;background:{'rgba(24,119,242,.06)' if fb_image_mode=='none' else 'transparent'}">
+                    <input type="radio" name="facebook_image" value="none" {"checked" if fb_image_mode == "none" else ""} style="width:16px;height:16px" />
+                    <div><div style="font-weight:600;font-size:13px">&#128683; Sem imagem</div><div style="font-size:11px;color:var(--muted)">Publica apenas o texto, sem imagem ou preview</div></div>
+                  </label>
+                </div>
+              </div>
               <div style="display:flex;justify-content:flex-end">
                 <button class="btn" type="submit" style="background:#1877f2;border-color:#1877f2;padding:11px 28px;font-size:14px">
                   <svg width='14' height='14' viewBox='0 0 24 24' fill='#fff' style='margin-right:6px'><path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z'/></svg>
@@ -3548,12 +3529,16 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         integrations = list(db.scalars(select(Integration).where(Integration.profile_id == p.id).order_by(Integration.created_at.desc())))
         fb_pages: list[dict] = []
         fb_integ = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.FACEBOOK))
+        fb_oauth_app_id = ""
+        fb_oauth_app_secret_saved = False
         if fb_integ:
             try:
                 fb_creds = decrypt_json(fb_integ.credentials_encrypted)
                 pages_val = fb_creds.get("pages") if isinstance(fb_creds, dict) else None
                 if isinstance(pages_val, list):
                     fb_pages = [x for x in pages_val if isinstance(x, dict)]
+                fb_oauth_app_id = str(fb_creds.get("oauth_app_id") or "").strip()
+                fb_oauth_app_secret_saved = bool(str(fb_creds.get("oauth_app_secret") or "").strip())
             except Exception:
                 fb_pages = []
         fb_rows = ""
@@ -3564,17 +3549,38 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             nm = str(pg.get("name") or "").strip()
             token = str(pg.get("access_token") or "").strip()
             token_state = "salvo" if token else "faltando"
+            _fb_test_btn_id = f"fb-test-{p.id}-{pid[:8]}"
+            _fb_test_btn = (
+                f"<button type='button' id='{_fb_test_btn_id}' "
+                f"onclick=\"(function(){{var btn=document.getElementById('{_fb_test_btn_id}');"
+                f"btn.disabled=true;btn.textContent='Testando...';"
+                f"fetch('/app/profiles/{p.id}/integrations/facebook/pages/test',{{method:'POST',"
+                f"headers:{{'Content-Type':'application/x-www-form-urlencoded'}},"
+                f"body:'page_id={html.escape(pid, quote=True)}'}}).then(function(r){{return r.json();}})"
+                f".then(function(d){{var s=document.getElementById('{_fb_test_btn_id}-status');"
+                f"if(d.ok){{s.innerHTML='<span style=\\'color:#10b981;font-weight:700\\'>&#10003; '+d.name+'</span>';}}"
+                f"else{{s.innerHTML='<span style=\\'color:#ef4444;font-weight:700\\'>&#10007; '+(d.error||'erro')+'</span>';}}"
+                f"btn.textContent='Testar';btn.disabled=false;}})"
+                f".catch(function(){{var s=document.getElementById('{_fb_test_btn_id}-status');"
+                f"s.innerHTML='<span style=\\'color:#ef4444\\'>Erro de rede</span>';"
+                f"btn.textContent='Testar';btn.disabled=false;}});}})()\""
+                f" style='font-size:12px;padding:5px 12px' class='btn flat'>Testar</button>"
+            )
             fb_rows += (
                 f"<tr style='border-top:1px solid var(--border)'>"
                 f"<td style='padding:12px 18px;font-size:13px;font-weight:600'>{html.escape(nm) or '—'}</td>"
                 f"<td style='padding:12px 18px;font-size:13px;color:var(--muted);font-family:monospace'>{html.escape(pid)}</td>"
                 f"<td style='padding:12px 18px'><span class='pill'>{html.escape(token_state)}</span></td>"
-                f"<td style='padding:12px 18px;text-align:right'><form method='post' action='/app/profiles/{p.id}/integrations/facebook/pages/remove' style='margin:0'>"
+                f"<td id='{_fb_test_btn_id}-status' style='padding:12px 18px;font-size:12px;color:var(--muted)'>—</td>"
+                f"<td style='padding:12px 18px;text-align:right'><div style='display:flex;gap:6px;justify-content:flex-end;align-items:center'>"
+                f"{_fb_test_btn}"
+                f"<form method='post' action='/app/profiles/{p.id}/integrations/facebook/pages/remove' style='margin:0'>"
                 f"<input type='hidden' name='page_id' value='{html.escape(pid)}' />"
-                f"<button class='btn secondary' type='submit' style='font-size:12px;padding:5px 12px;color:#ef4444'>Remover</button></form></td></tr>"
+                f"<button class='btn secondary' type='submit' style='font-size:12px;padding:5px 12px;color:#ef4444'>Remover</button></form>"
+                f"</div></td></tr>"
             )
         if not fb_rows:
-            fb_rows = "<tr><td colspan='4' style='padding:20px 18px;text-align:center;color:var(--muted);font-size:13px'>Nenhuma página cadastrada.</td></tr>"
+            fb_rows = "<tr><td colspan='5' style='padding:20px 18px;text-align:center;color:var(--muted);font-size:13px'>Nenhuma p\u00e1gina cadastrada.</td></tr>"
         # Monta linhas da tabela Conexões com URL extraída dos dados cifrados
         conn_rows = ""
         for i in integrations:
@@ -3995,36 +4001,149 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
               </form>
             </div>"""
         elif itab == "facebook":
+            _fb_step_s = "display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)"
+            _fb_num_s  = "width:28px;height:28px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;margin-top:1px"
             itab_content = f"""
-            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:24px;margin-bottom:24px">
-              <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Adicionar página do Facebook</div>
-              <form method="post" action="/app/profiles/{p.id}/integrations/facebook/pages/add">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <!-- ══ Passo a passo ══ -->
+            <details style="margin-bottom:20px" open>
+              <summary style="cursor:pointer;font-size:14px;font-weight:700;color:var(--text);padding:12px 0;list-style:none;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)">
+                <span style="width:26px;height:26px;border-radius:7px;background:rgba(24,119,242,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px">&#128214;</span>
+                Como conectar sua p&#225;gina ao Facebook
+                <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:4px">(clique para recolher)</span>
+              </summary>
+              <div style="padding:16px 0 4px">
+                <div style="background:rgba(24,119,242,.07);border:1px solid rgba(24,119,242,.2);border-radius:12px;padding:14px 18px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.6">
+                  O PostHub precisa de um <b style="color:var(--text)">Page Access Token</b> para publicar em nome da sua p&#225;gina. Siga os passos abaixo para obt&#234;-lo sem expor sua senha pessoal.
+                </div>
+
+                <div style="{_fb_step_s}">
+                  <span style="{_fb_num_s}">1</span>
                   <div>
-                    <label>Nome (opcional)</label>
-                    <input name="name" placeholder="Ex: Minha Página" />
-                  </div>
-                  <div>
-                    <label>Page ID</label>
-                    <input name="page_id" placeholder="Ex: 1234567890" required />
-                  </div>
-                  <div style="grid-column:1/-1">
-                    <label>Page Access Token</label>
-                    <input name="access_token" type="password" placeholder="Cole o token da página" required />
+                    <div style="font-weight:600;font-size:13px;margin-bottom:4px">Acesse o Graph API Explorer</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.65">
+                      Abra <b>developers.facebook.com/tools/explorer</b> no navegador.<br>
+                      No canto superior direito, fa&#231;a login com sua conta Meta (a mesma que administra a p&#225;gina).
+                    </div>
+                    <a href="https://developers.facebook.com/tools/explorer" target="_blank" rel="noopener"
+                       style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:12px;padding:5px 12px;background:rgba(24,119,242,.12);border:1px solid rgba(24,119,242,.3);border-radius:8px;color:#1877f2;text-decoration:none;font-weight:600">
+                      &#8599; Abrir Graph API Explorer
+                    </a>
                   </div>
                 </div>
-                <div style="margin-top:16px"><button class="btn" type="submit">Adicionar página</button></div>
+
+                <div style="{_fb_step_s}">
+                  <span style="{_fb_num_s}">2</span>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;margin-bottom:4px">Selecione seu App Meta e gere um User Token</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.65">
+                      No Explorer, clique em <b>Meta App</b> e selecione seu app (ou crie um em developers.facebook.com).<br>
+                      Clique em <b>Gerar Token de Acesso (Generate Access Token)</b>.<br>
+                      Na janela de permiss&#245;es, marque obrigatoriamente:<br>
+                      <span style="font-family:monospace;background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11px;margin:4px 4px 0 0;display:inline-block">pages_manage_posts</span>
+                      <span style="font-family:monospace;background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11px;margin:4px 4px 0 0;display:inline-block">pages_read_engagement</span>
+                      <span style="font-family:monospace;background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11px;margin:4px 4px 0 0;display:inline-block">pages_show_list</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="{_fb_step_s}">
+                  <span style="{_fb_num_s}">3</span>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;margin-bottom:4px">Obtenha o Page Access Token da sua p&#225;gina</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.65">
+                      Com o User Token gerado no Passo 2, fa&#231;a a seguinte chamada no Explorer:<br>
+                      <code style="display:block;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin:8px 0;font-size:12px;word-break:break-all">GET /me/accounts?fields=id,name,access_token</code>
+                      A resposta lista todas as suas p&#225;ginas. Copie o <b>access_token</b> e o <b>id</b> da p&#225;gina desejada.
+                    </div>
+                  </div>
+                </div>
+
+                <div style="{_fb_step_s};border-bottom:none">
+                  <span style="{_fb_num_s}">4</span>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;margin-bottom:4px">Cole as informa&#231;&#245;es no formul&#225;rio abaixo</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.65">
+                      Preencha o <b>Page ID</b> (o campo <code style="font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px">id</code>) e o <b>Page Access Token</b> (o campo <code style="font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px">access_token</code>).<br>
+                      Voc&#234; pode adicionar quantas p&#225;ginas quiser — cada uma &#233; configurada de forma independente para este bot.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <!-- ══ OAuth automático ══ -->
+            <div style="background:linear-gradient(135deg,rgba(24,119,242,.08),rgba(24,119,242,.03));border:1.5px solid rgba(24,119,242,.25);border-radius:14px;padding:22px;margin-bottom:20px">
+              <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px;display:flex;align-items:center;gap:8px">
+                <svg width='18' height='18' viewBox='0 0 24 24' fill='#1877f2'><path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z'/></svg>
+                Conectar automaticamente via OAuth
+              </div>
+              <div style="font-size:12px;color:var(--muted);margin-bottom:16px">Configure o App ID e Secret do seu app Meta uma vez — depois basta clicar em Conectar para importar todas as suas páginas automaticamente.</div>
+              <form method="post" action="/app/profiles/{p.id}/integrations/facebook/oauth-config" style="margin-bottom:14px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+                  <div>
+                    <label style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block">App ID</label>
+                    <input name="oauth_app_id" value="{html.escape(fb_oauth_app_id)}" placeholder="Ex: 1429193945189041" style="margin:0" />
+                  </div>
+                  <div>
+                    <label style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block">App Secret {"&#10003; salvo" if fb_oauth_app_secret_saved else ""}</label>
+                    <input name="oauth_app_secret" type="password" placeholder="{"Deixe vazio para manter" if fb_oauth_app_secret_saved else "Cole a chave secreta do app"}" style="margin:0" />
+                  </div>
+                </div>
+                <div style="font-size:11px;color:var(--muted);margin-bottom:12px;padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
+                  &#128279; Adicione esta URL como <b>URI de redirecionamento OAuth</b> no seu app Meta:<br>
+                  <code style="font-size:11px;word-break:break-all;color:var(--primary)">/app/oauth/facebook/callback</code>
+                  (ex: <code style="font-size:11px">http://localhost:8000/app/oauth/facebook/callback</code>)
+                </div>
+                <div style="display:flex;gap:10px;align-items:center">
+                  <button class="btn flat" type="submit" style="font-size:13px;padding:9px 18px">Salvar credenciais</button>
+                  {"<a href='/app/oauth/facebook/start?profile_id=" + p.id + "' class='btn' style='background:#1877f2;border-color:#1877f2;font-size:13px;padding:9px 20px;text-decoration:none;display:inline-flex;align-items:center;gap:6px'><svg width=14 height=14 viewBox=0 0 24 24 fill=#fff><path d=M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z /></svg> Conectar com Facebook</a>" if fb_oauth_app_id and fb_oauth_app_secret_saved else "<span style='font-size:12px;color:var(--muted)'>Salve as credenciais para habilitar o botão Conectar</span>"}
+                </div>
               </form>
             </div>
-            <div style="font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Páginas cadastradas</div>
+
+            <!-- ══ Formulário de adição ══ -->
+            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:24px">
+              <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:16px;display:flex;align-items:center;gap:8px">
+                <span style="font-size:18px">&#10133;</span> Adicionar p&#225;gina manualmente
+              </div>
+              <form method="post" action="/app/profiles/{p.id}/integrations/facebook/pages/add">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+                  <div>
+                    <label>Nome da p&#225;gina <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
+                    <input name="name" placeholder="Ex: Receitas da Mari" />
+                  </div>
+                  <div>
+                    <label>Page ID <span style="color:#ef4444">*</span></label>
+                    <input name="page_id" placeholder="Ex: 123456789012345" required />
+                  </div>
+                  <div style="grid-column:1/-1">
+                    <label>Page Access Token <span style="color:#ef4444">*</span></label>
+                    <div style="position:relative">
+                      <input name="access_token" id="fb-token-input-{p.id}" type="password" placeholder="Cole o token obtido em /me/accounts" required style="padding-right:80px" />
+                      <button type="button" onclick="var i=document.getElementById('fb-token-input-{p.id}');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'Mostrar':'Ocultar'"
+                        style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:12px;color:var(--muted);padding:4px 6px">Mostrar</button>
+                    </div>
+                  </div>
+                </div>
+                <div style="margin-top:16px;display:flex;gap:10px">
+                  <button class="btn" type="submit">&#10133; Adicionar p&#225;gina</button>
+                </div>
+              </form>
+            </div>
+
+            <!-- ══ Páginas cadastradas ══ -->
+            <div style="font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:10px">
+              P&#225;ginas cadastradas neste bot
+            </div>
             <div style="border:1px solid var(--border);border-radius:14px;overflow:hidden">
               <table style="width:100%;border-collapse:collapse">
                 <thead>
                   <tr style="background:var(--surface2)">
-                    <th style="padding:11px 18px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Nome</th>
-                    <th style="padding:11px 18px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Page ID</th>
-                    <th style="padding:11px 18px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Token</th>
-                    <th style="padding:11px 18px;text-align:right;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Ações</th>
+                    <th style="padding:10px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">P&#225;gina</th>
+                    <th style="padding:10px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Page ID</th>
+                    <th style="padding:10px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Token</th>
+                    <th style="padding:10px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Status</th>
+                    <th style="padding:10px 16px;text-align:right;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">A&#231;&#245;es</th>
                   </tr>
                 </thead>
                 <tbody>{fb_rows}</tbody>
@@ -4123,53 +4242,766 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         cfg = dict(p.schedule_config_json or {})
         posts_per_day = int(cfg.get("posts_per_day") or 15)
         interval_minutes = int(cfg.get("interval_minutes") or 0)
+        respect = int(cfg.get("respect_schedule") or 0) == 1
         start_at_utc = str(cfg.get("start_at_utc") or "").strip()
         start_local_value = ""
+        _sched_base_local = None
+        _user_tz = _user_zoneinfo(user)
         if start_at_utc:
             try:
                 dt = datetime.fromisoformat(start_at_utc.replace("Z", "+00:00"))
-                start_local_value = dt.astimezone(_user_zoneinfo(user)).strftime("%Y-%m-%dT%H:%M")
+                _sched_base_local = dt.astimezone(_user_tz).replace(tzinfo=None)
+                start_local_value = _sched_base_local.strftime("%Y-%m-%dT%H:%M")
             except Exception:
                 start_local_value = ""
+
+        # ── queued/processing posts ────────────────────────────────
+        # Busca posts pending ou processing com qualquer job na fila/rodando
+        _sched_posts_raw = db.execute(
+            select(Post, Job, CollectedContent)
+            .join(
+                Job,
+                (Job.post_id == Post.id)
+                & (Job.status.in_([JobStatus.queued, JobStatus.running]))
+            )
+            .outerjoin(CollectedContent, CollectedContent.id == Post.collected_content_id)
+            .where(
+                Post.profile_id == p.id,
+                Post.status.in_([PostStatus.pending, PostStatus.processing]),
+            )
+            .order_by(Job.run_at.asc())
+        ).all()
+        # deduplica: um post pode ter múltiplos jobs, manter só o primeiro (run_at mais cedo)
+        _seen_ids: set = set()
+        _sched_posts = []
+        for _row in _sched_posts_raw:
+            if _row[0].id not in _seen_ids:
+                _seen_ids.add(_row[0].id)
+                _sched_posts.append((_row[0], _row[1], _row[2]))
+
+        # Posts recentemente concluídos (últimas 48h) com URL do WP
+        _completed_posts_raw = db.execute(
+            select(Post, CollectedContent)
+            .outerjoin(CollectedContent, CollectedContent.id == Post.collected_content_id)
+            .where(
+                Post.profile_id == p.id,
+                Post.status == PostStatus.completed,
+                Post.wp_url.isnot(None),
+                Post.published_at >= datetime.utcnow() - timedelta(hours=48),
+            )
+            .order_by(Post.published_at.desc())
+            .limit(5)
+        ).all()
+        _completed_posts = list(_completed_posts_raw)
+
+        # active queue counts (all queued/running jobs for this profile)
+        _sq_jobs = int(db.scalar(
+            select(func.count()).select_from(Job).where(
+                Job.profile_id == p.id,
+                Job.status.in_([JobStatus.queued, JobStatus.running])
+            )
+        ) or 0)
+        _sq_posts_proc = int(db.scalar(
+            select(func.count()).select_from(Post).where(
+                Post.profile_id == p.id,
+                Post.status == PostStatus.processing
+            )
+        ) or 0)
+        _has_active = (_sq_jobs + len(_sched_posts) + _sq_posts_proc) > 0
+
+        # ── helpers ───────────────────────────────────────────────
+        _now_local = _to_user_local(datetime.utcnow(), user=user) or datetime.now()
+        _interval_txt = f"{interval_minutes} min entre posts" if interval_minutes > 0 else "sem intervalo (tudo seguido)"
+        _start_txt = (_sched_base_local.strftime("%d/%m/%Y às %H:%M") if (respect and _sched_base_local) else "agora")
+
+        def _fmt_when(dt_obj):
+            diff = int((dt_obj - _now_local).total_seconds() / 60)
+            if dt_obj < _now_local:
+                return "<span style='color:var(--muted);font-size:11px'>em processamento</span>"
+            elif diff < 60:
+                return f"<span style='color:#10b981;font-size:11px'>em {diff} min</span>"
+            elif diff < 1440:
+                return f"<span style='font-size:11px;color:var(--muted)'>em {diff//60}h{diff%60:02d}</span>"
+            else:
+                return f"<span style='font-size:11px;color:var(--muted)'>em {diff//1440}d</span>"
+
+        # ── helpers de SVG ───────────────────────────────────────
+        _ico_edit_sm  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
+        _ico_del_sm   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>'
+
+        # ── CSS de tabela ─────────────────────────────────────────
+        _tbl_th = ("font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;"
+                   "letter-spacing:.06em;padding:5px 6px 5px 0;border-bottom:2px solid var(--border);"
+                   "white-space:nowrap;user-select:none")
+        _tbl_td = "padding:6px 6px 6px 0;vertical-align:middle;font-size:12px"
+
+        # Botão ação em lote (aparece quando há selecionados)
+        _bulk_bar = f"""
+        <div id="schedBulkBar-{p.id}" style="display:none;align-items:center;gap:10px;
+          padding:8px 12px;border-radius:10px;background:rgba(139,92,246,.1);
+          border:1px solid rgba(139,92,246,.25);margin-bottom:10px;flex-wrap:wrap">
+          <span id="schedBulkCount-{p.id}" style="font-size:13px;font-weight:600;color:var(--text)">
+            0 selecionados
+          </span>
+          <button type="button" onclick="schedBulkEdit('{p.id}')"
+            class="btn secondary" style="font-size:12px;padding:5px 12px;gap:5px">
+            {_ico_edit_sm} Editar selecionados
+          </button>
+          <button type="button" onclick="schedBulkDelete('{p.id}')"
+            style="background:none;border:1px solid rgba(239,68,68,.4);color:#ef4444;
+              border-radius:8px;padding:5px 12px;font-size:12px;cursor:pointer;
+              display:inline-flex;align-items:center;gap:5px">
+            {_ico_del_sm} Excluir selecionados
+          </button>
+          <button type="button" onclick="schedClearSel('{p.id}')"
+            style="background:none;border:none;color:var(--muted);font-size:12px;
+              cursor:pointer;padding:4px 8px;border-radius:6px;margin-left:auto">
+            Limpar seleção ✕
+          </button>
+        </div>"""
+
+        # Modal de edição em lote
+        _bulk_edit_modal = f"""
+        <div id="schedBulkEditModal-{p.id}" style="display:none;margin-bottom:10px;
+          padding:14px 16px;border-radius:12px;background:rgba(139,92,246,.07);
+          border:1px solid rgba(139,92,246,.2)">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px">
+            Editar hor&#225;rio dos selecionados
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <label style="font-size:12px;color:var(--muted)">Nova data/hora:</label>
+            <input type="datetime-local" id="schedBulkDateTime-{p.id}"
+              style="font-size:13px;padding:6px 10px;border-radius:8px;
+                border:1px solid var(--border);background:var(--surface);color:var(--text)" />
+            <button type="button" onclick="schedBulkEditConfirm('{p.id}')"
+              class="btn flat" style="font-size:12px;padding:6px 14px">Aplicar</button>
+            <button type="button"
+              onclick="document.getElementById('schedBulkEditModal-{p.id}').style.display='none'"
+              class="btn secondary" style="font-size:12px;padding:6px 14px">Cancelar</button>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:7px">
+            O intervalo entre posts ser&#225; recalculado a partir deste hor&#225;rio.
+          </div>
+        </div>"""
+
+        # ── cabeçalho da tabela ───────────────────────────────────
+        _tbl_head = f"""
+        <table id="schedTable-{p.id}" style="width:100%;border-collapse:collapse;table-layout:fixed">
+          <colgroup>
+            <col style="width:26px">
+            <col style="width:24px">
+            <col>
+            <col style="width:92px">
+            <col style="width:62px">
+            <col style="width:96px">
+            <col style="width:36px">
+            <col style="width:36px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th style="{_tbl_th};padding-left:0">
+                <input type="checkbox" id="schedSelAll-{p.id}" title="Selecionar todos"
+                  onchange="schedToggleAll('{p.id}',this.checked)"
+                  style="width:14px;height:14px;cursor:pointer;accent-color:rgba(139,92,246,.9)">
+              </th>
+              <th style="{_tbl_th}">#</th>
+              <th style="{_tbl_th}">T&#237;tulo</th>
+              <th style="{_tbl_th}">Data</th>
+              <th style="{_tbl_th}">Hora</th>
+              <th style="{_tbl_th}">Status</th>
+              <th style="{_tbl_th};text-align:center">Editar</th>
+              <th style="{_tbl_th};text-align:center">Excluir</th>
+            </tr>
+          </thead>
+          <tbody id="schedTbody-{p.id}">"""
+
+        # ── "O que será feito" rows ───────────────────────────────
+        _preview_rows = _bulk_bar + _bulk_edit_modal + _tbl_head
+        _tbody_rows = ""
+
+        if _sched_posts:
+            # Real scheduled posts
+            for _idx, (_sp, _sj, _sc) in enumerate(_sched_posts):
+                _outs = _sp.outputs_json if isinstance(_sp.outputs_json, dict) else {}
+                _title_raw = str((_outs.get("recipe") or {}).get("title") or "").strip()
+                if not _title_raw and _sc:
+                    _title_raw = str(_sc.title or "").strip()
+                _title_disp = html.escape(_title_raw[:60]) if _title_raw else f"Post {_idx+1} — t&#237;tulo pendente"
+                _run_at = _sj.run_at or _now_local
+                _run_local = _to_user_local(_run_at, user=user) or _now_local
+                _date_str = _run_local.strftime("%d/%m/%Y")
+                _time_str = _run_local.strftime("%H:%M")
+                _when_str = _fmt_when(_run_local)
+                _run_at_input = _run_local.strftime("%Y-%m-%dT%H:%M")
+                _sid = html.escape(_sp.id)
+                _tbody_rows += f"""
+            <tr id="srow-{_sid}" class="sched-row" data-id="{_sid}" data-type="real"
+              style="border-bottom:1px solid var(--border)">
+              <td style="{_tbl_td};padding-left:0">
+                <input type="checkbox" class="sched-cb" data-profile="{p.id}"
+                  value="{_sid}" onchange="schedOnCheck('{p.id}')"
+                  style="width:14px;height:14px;cursor:pointer;accent-color:rgba(139,92,246,.9)">
+              </td>
+              <td style="{_tbl_td}">
+                <span style="width:22px;height:22px;border-radius:50%;background:rgba(139,92,246,.15);
+                  display:inline-flex;align-items:center;justify-content:center;
+                  font-size:10px;font-weight:700;color:rgba(139,92,246,.9)">{_idx+1}</span>
+              </td>
+              <td style="{_tbl_td};font-weight:600;line-height:1.35">{_title_disp}</td>
+              <td style="{_tbl_td};color:var(--muted);white-space:nowrap">{_date_str}</td>
+              <td style="{_tbl_td};font-weight:700;white-space:nowrap">{_time_str}</td>
+              <td style="{_tbl_td}">{_when_str}</td>
+              <td style="{_tbl_td};text-align:center">
+                <button type="button" onclick="toggleSchedEdit('{_sid}')"
+                  title="Editar hor&#225;rio"
+                  style="background:none;border:none;cursor:pointer;color:var(--muted);
+                    padding:5px;border-radius:6px;display:inline-flex;align-items:center"
+                  onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
+                  {_ico_edit_sm}
+                </button>
+              </td>
+              <td style="{_tbl_td};text-align:center">
+                <button type="button" onclick="schedDeletePost('{p.id}','{_sid}')" title="Excluir"
+                  style="background:none;border:none;cursor:pointer;color:var(--muted);
+                    padding:5px;border-radius:6px;display:inline-flex;align-items:center"
+                  onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='var(--muted)'">
+                  {_ico_del_sm}
+                </button>
+              </td>
+            </tr>
+            <tr id="sedit-row-{_sid}" style="display:none">
+              <td colspan="8" style="padding:0 0 12px 32px">
+                <form method="post" action="/app/profiles/{p.id}/schedule/posts/{_sid}/reschedule"
+                  style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0">
+                  <label style="font-size:12px;color:var(--muted)">Novo hor&#225;rio:</label>
+                  <input type="datetime-local" name="run_at" value="{_run_at_input}"
+                    style="font-size:13px;padding:6px 10px;border-radius:8px;
+                      border:1px solid var(--border);background:var(--surface);color:var(--text)" />
+                  <button class="btn flat" type="submit" style="font-size:12px;padding:6px 14px">Salvar</button>
+                  <button type="button" onclick="toggleSchedEdit('{_sid}')"
+                    class="btn secondary" style="font-size:12px;padding:6px 14px">Cancelar</button>
+                </form>
+              </td>
+            </tr>"""
+
+        # ── Posts recentemente concluídos (últimas 48h) ──────────
+        if _completed_posts:
+            if _sched_posts:
+                _tbody_rows += f"""
+            <tr><td colspan="8" style="padding:2px 0;border-bottom:1px dashed rgba(16,185,129,.3)"></td></tr>"""
+            for _cp, _cc in _completed_posts:
+                _cp_outs = _cp.outputs_json if isinstance(_cp.outputs_json, dict) else {}
+                _cp_title = str((_cp_outs.get("recipe") or {}).get("title") or "").strip()
+                if not _cp_title and _cc:
+                    _cp_title = str(_cc.title or "").strip()
+                _cp_title_disp = html.escape(_cp_title[:60]) if _cp_title else "Post publicado"
+                _cp_pub = _cp.published_at
+                try:
+                    _cp_local = _to_user_local(_cp_pub, user=user) or _now_local
+                except Exception:
+                    _cp_local = _now_local
+                _cp_date = _cp_local.strftime("%d/%m/%Y")
+                _cp_time = _cp_local.strftime("%H:%M")
+                _cp_url = html.escape(str(_cp.wp_url or ""))
+                _cp_link = f'<a href="{_cp_url}" target="_blank" rel="noopener" style="color:#10b981;font-size:11px;display:inline-flex;align-items:center;gap:3px;text-decoration:none;white-space:nowrap" title="Ver post no WordPress">&#128279; ver post</a>' if _cp_url else ""
+                _tbody_rows += f"""
+            <tr style="border-bottom:1px solid var(--border);background:rgba(16,185,129,.03)">
+              <td style="{_tbl_td};padding-left:0"></td>
+              <td style="{_tbl_td}">
+                <span style="font-size:14px" title="Publicado">&#9989;</span>
+              </td>
+              <td style="{_tbl_td};font-weight:600;line-height:1.3">{_cp_title_disp}</td>
+              <td style="{_tbl_td};color:var(--muted);white-space:nowrap">{_cp_date}</td>
+              <td style="{_tbl_td};font-weight:700;white-space:nowrap">{_cp_time}</td>
+              <td style="{_tbl_td}">
+                <span style="font-size:11px;font-weight:600;color:#10b981;background:rgba(16,185,129,.1);
+                  border-radius:5px;padding:2px 6px;white-space:nowrap">&#10003; Conclu&#237;do</span>
+              </td>
+              <td style="{_tbl_td};text-align:center" colspan="2">{_cp_link}</td>
+            </tr>"""
+
+        if not _sched_posts:
+            # Projected timeline
+            _preview_base = _sched_base_local if (respect and _sched_base_local) else _now_local
+            _show_n = min(posts_per_day, 8)
+            for _i in range(_show_n):
+                _pt = _preview_base + timedelta(minutes=interval_minutes * _i)
+                _is_past = _pt < _now_local
+                _date_str = _pt.strftime("%d/%m/%Y")
+                _time_str = _pt.strftime("%H:%M")
+                _run_at_input = _pt.strftime("%Y-%m-%dT%H:%M")
+                _slot_id = f"proj-{_i}"
+                _status_label = "<span style='font-size:11px;color:#ef4444'>atrasado</span>" if _is_past else "<span style='font-size:11px;color:var(--muted)'>projeção</span>"
+                _tbody_rows += f"""
+            <tr id="srow-{_slot_id}" class="sched-row" data-id="{_slot_id}" data-type="proj"
+              style="border-bottom:1px solid var(--border)">
+              <td style="{_tbl_td};padding-left:0">
+                <input type="checkbox" class="sched-cb" data-profile="{p.id}"
+                  value="{_slot_id}" onchange="schedOnCheck('{p.id}')"
+                  style="width:14px;height:14px;cursor:pointer;accent-color:rgba(139,92,246,.9)">
+              </td>
+              <td style="{_tbl_td}">
+                <span style="width:22px;height:22px;border-radius:50%;background:rgba(139,92,246,.1);
+                  display:inline-flex;align-items:center;justify-content:center;
+                  font-size:10px;font-weight:700;color:rgba(139,92,246,.7)">{_i+1}</span>
+              </td>
+              <td style="{_tbl_td};color:var(--muted);font-style:italic">
+                Post {_i+1} — t&#237;tulo gerado ao ativar
+              </td>
+              <td style="{_tbl_td};color:var(--muted);white-space:nowrap">{_date_str}</td>
+              <td style="{_tbl_td};font-weight:700;white-space:nowrap">{_time_str}</td>
+              <td style="{_tbl_td}">{_status_label}</td>
+              <td style="{_tbl_td};text-align:center">
+                <button type="button" onclick="toggleSchedEdit('{_slot_id}')"
+                  title="Editar hor&#225;rio previsto"
+                  style="background:none;border:none;cursor:pointer;color:var(--muted);
+                    padding:5px;border-radius:6px;display:inline-flex;align-items:center"
+                  onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
+                  {_ico_edit_sm}
+                </button>
+              </td>
+              <td style="{_tbl_td};text-align:center">
+                <button type="button" onclick="removeSchedSlot('{_slot_id}')"
+                  title="Remover slot"
+                  style="background:none;border:none;cursor:pointer;color:var(--muted);
+                    padding:5px;border-radius:6px;display:inline-flex;align-items:center"
+                  onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='var(--muted)'">
+                  {_ico_del_sm}
+                </button>
+              </td>
+            </tr>
+            <tr id="sedit-row-{_slot_id}" style="display:none">
+              <td colspan="8" style="padding:0 0 12px 32px">
+                <form method="post" action="/app/profiles/{p.id}/schedule"
+                  style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0">
+                  <input type="hidden" name="posts_per_day" value="{posts_per_day}" />
+                  <input type="hidden" name="interval_minutes" value="{interval_minutes}" />
+                  <input type="hidden" name="respect_schedule" value="{'1' if respect else '0'}" />
+                  <label style="font-size:12px;color:var(--muted)">Novo in&#237;cio (slot {_i+1}):</label>
+                  <input type="datetime-local" name="start_at" value="{_run_at_input}"
+                    style="font-size:13px;padding:6px 10px;border-radius:8px;
+                      border:1px solid var(--border);background:var(--surface);color:var(--text)" />
+                  <button class="btn flat" type="submit" style="font-size:12px;padding:6px 14px">Salvar</button>
+                  <button type="button" onclick="toggleSchedEdit('{_slot_id}')"
+                    class="btn secondary" style="font-size:12px;padding:6px 14px">Cancelar</button>
+                </form>
+              </td>
+            </tr>"""
+            _more = posts_per_day - _show_n
+            if _more > 0:
+                _tbody_rows += f"""
+            <tr><td colspan="8" style="padding:8px 0;color:var(--muted);font-size:12px;text-align:center">
+              + {_more} post{'s' if _more!=1 else ''} a mais...
+            </td></tr>"""
+
+        # fecha tabela + rodapé com "Excluir todos"
+        # Se há posts reais: POST para cancelar no banco.
+        # Se é projeção: botão JS que remove todas as linhas da tabela.
+        if _sched_posts:
+            _del_all_btn = f"""
+          <button type="button" onclick="schedDeleteAll('{p.id}', {len(_sched_posts)})"
+            style="background:none;border:none;cursor:pointer;color:#ef4444;
+              font-size:12px;display:inline-flex;align-items:center;gap:5px;
+              padding:5px 2px;text-decoration:underline;text-underline-offset:2px">
+            {_ico_del_sm} Excluir todos os agendados ({len(_sched_posts)})
+          </button>"""
+        else:
+            _del_all_btn = f"""
+          <button type="button"
+            onclick="schedRemoveAllSlots('{p.id}')"
+            style="background:none;border:none;cursor:pointer;color:#ef4444;
+              font-size:12px;display:inline-flex;align-items:center;gap:5px;
+              padding:5px 2px;text-decoration:underline;text-underline-offset:2px">
+            {_ico_del_sm} Excluir todos os agendados
+          </button>"""
+
+        _preview_rows += _tbody_rows + f"""
+          </tbody>
+        </table>
+        <div style="padding:14px 0 2px;display:flex;align-items:center;justify-content:flex-end">
+          {_del_all_btn}
+        </div>"""
+
+        _posts_label = f"{len(_sched_posts)} agendado{'s' if len(_sched_posts)!=1 else ''}" if _sched_posts else "Nenhum agendado"
+        _done_label = f" &bull; {len(_completed_posts)} conclu&#237;do{'s' if len(_completed_posts)!=1 else ''}" if _completed_posts else ""
+        _preview_title = f"Agendamento &mdash; {_posts_label}{_done_label}" if (_sched_posts or _completed_posts) else "Agendamento (projeção)"
+
         body += f"""
         {_ph("tab-agendamento")}
-        <div class="card">
+
+        <!-- ── Fila ativa ─────────────────────────────────────── -->
+        {_ph("agendamento-fila-ativa")}
+        {"" if not _has_active else f'''
+        <div class="card" style="margin-bottom:14px;border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.05)">
           <details class="toggle-section" open>
-            <summary><span class="ts-title">Agendamento</span><span class="ts-arrow">▶</span></summary>
+            <summary>
+              <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+                <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block;box-shadow:0 0 0 3px rgba(245,158,11,.22)"></span>
+                Fila ativa &mdash; {_sq_jobs} job{"s" if _sq_jobs!=1 else ""} na fila, {len(_sched_posts)} pendente{"s" if len(_sched_posts)!=1 else ""}{"" if _sq_posts_proc==0 else f", {_sq_posts_proc} processando"}
+              </span>
+              <span class="ts-arrow">&#9655;</span>
+            </summary>
             <div class="ts-body">
-              {_ph("form-agendamento")}
-              <p class="muted">Define quantidade, intervalo e data/hora de início. Esse agendamento vai valer pro WordPress e depois pro Facebook também.</p>
+              <p class="muted" style="margin-bottom:12px">
+                H&#225; postagens em andamento. Cancele tudo para reconfigurar.
+              </p>
+              <button class="btn" type="button"
+                onclick="schedDeleteAll('{p.id}', {_sq_jobs + len(_sched_posts)})"
+                style="background:#ef4444;border-color:#ef4444;color:#fff;gap:7px">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                Cancelar tudo
+              </button>
+            </div>
+          </details>
+        </div>'''}
+
+        <!-- ── Configurar ─────────────────────────────────────── -->
+        {_ph("agendamento-config")}
+        <div class="card" style="margin-bottom:14px">
+          <details class="toggle-section" open>
+            <summary>
+              <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+                <span style="width:26px;height:26px;border-radius:7px;background:rgba(139,92,246,.15);
+                  display:inline-flex;align-items:center;justify-content:center;font-size:13px">&#9881;</span>
+                Configurar agendamento
+              </span>
+              <span class="ts-arrow">&#9655;</span>
+            </summary>
+            <div class="ts-body">
+              {_ph("agendamento-form")}
+              <p class="muted" style="margin-bottom:14px">
+                Define quantidade, intervalo e data/hora de in&#237;cio.
+                <b>Salvar</b> guarda as configura&#231;&#245;es. <b>Ativar</b> roda o diagn&#243;stico e inicia.
+              </p>
               <form method="post" action="/app/profiles/{p.id}/schedule">
                 <div class="row">
                   <div class="col">
-                    <label>Quantidade</label>
+                    <label>Quantidade de posts</label>
                     <input name="posts_per_day" type="number" min="1" step="1" value="{posts_per_day}" />
                   </div>
                   <div class="col">
-                    <label>Tempo entre postagens (min)</label>
+                    <label>Intervalo entre posts (min)</label>
                     <input name="interval_minutes" type="number" min="0" value="{interval_minutes}" />
-                    <div class="muted" style="margin-top:6px">0 = roda tudo seguido</div>
+                    <div class="muted" style="margin-top:6px">0 = publica tudo seguido</div>
                   </div>
                   <div class="col">
-                    <label>Começar em (data/hora)</label>
+                    <label>Data/hora de in&#237;cio</label>
                     <input name="start_at" type="datetime-local" value="{html.escape(start_local_value)}" />
-                    <div class="muted" style="margin-top:6px">Vazio = começar agora</div>
+                    <div class="muted" style="margin-top:6px">Vazio = come&#231;ar agora ao ativar</div>
                   </div>
                 </div>
-                <div class="row">
+                <div class="row" style="margin-top:12px">
                   <div class="col">
-                    <label>Respeitar agendamento</label>
+                    <label>Respeitar data/hora de in&#237;cio</label>
                     <select name="respect_schedule">
-                      <option value="0">Não (rodar agora)</option>
-                      <option value="1" {"selected" if int(cfg.get("respect_schedule") or 0) == 1 else ""}>Sim (usar intervalo e data/hora)</option>
+                      <option value="0" {"selected" if not respect else ""}>N&#227;o (usar intervalo, ignorar data/hora)</option>
+                      <option value="1" {"selected" if respect else ""}>Sim (aguardar data/hora antes de publicar)</option>
                     </select>
                   </div>
                 </div>
-                <div style="margin-top:12px"><button class="btn" type="submit">Salvar</button></div>
+                <div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                  <button class="btn flat" type="submit" style="gap:6px">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    Salvar configura&#231;&#227;o
+                  </button>
+                  <button type="button" class="btn" onclick="openSchedDiag('{p.id}')"
+                    style="gap:7px;background:#10b981;border-color:#10b981;color:#fff"
+                    {"disabled title='Cancele a fila ativa antes de reativar'" if _has_active else ""}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    Ativar agendamento
+                  </button>
+                </div>
               </form>
             </div>
           </details>
         </div>
+
+        <!-- ── O que será feito ───────────────────────────────── -->
+        {_ph("agendamento-preview")}
+        <div class="card" style="margin-bottom:14px">
+          <details class="toggle-section" open>
+            <summary>
+              <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+                <span style="width:26px;height:26px;border-radius:7px;background:rgba(16,185,129,.15);
+                  display:inline-flex;align-items:center;justify-content:center;font-size:14px">&#128640;</span>
+                &#128197; {_preview_title}
+              </span>
+              <span class="ts-arrow">&#9655;</span>
+            </summary>
+            <div class="ts-body">
+              {_ph("agendamento-preview-header")}
+              <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:13px;
+                padding:10px 14px;background:rgba(139,92,246,.07);border-radius:10px;
+                border:1px solid rgba(139,92,246,.12)">
+                <div>&#128197; <span class="muted">In&#237;cio:</span> <b>{_start_txt}</b></div>
+                <div>&#128221; <span class="muted">Posts:</span> <b>{posts_per_day}</b></div>
+                <div>&#9200; <span class="muted">Intervalo:</span> <b>{_interval_txt}</b></div>
+              </div>
+              {_ph("agendamento-lista-posts")}
+              <div style="overflow-x:auto">
+                {_preview_rows}
+              </div>
+              <p class="muted" style="margin-top:10px;font-size:12px">
+                &#9432; {"T&#237;tulos reais ap&#243;s coleta. Hor&#225;rios podem variar conforme tempo de processamento." if _sched_posts else "Projeção estimada. T&#237;tulos reais aparecem ap&#243;s ativar o agendamento."}
+              </p>
+            </div>
+          </details>
+        </div>
+
+        <!-- ── Custom confirm modal (global) ────────────────────── -->
+        <div class="diag-overlay" id="phConfirmOverlay" onclick="if(event.target===this)phConfirmReply(false)">
+          <div class="diag-modal" style="padding:28px 28px 24px;max-width:380px;text-align:center">
+            <div style="font-size:32px;margin-bottom:10px">&#9888;&#65039;</div>
+            <div id="phConfirmTitle" style="font-weight:700;font-size:16px;margin-bottom:8px;color:var(--text)">Confirmar</div>
+            <div id="phConfirmMsg" style="font-size:13px;color:var(--muted);margin-bottom:24px;line-height:1.55"></div>
+            <div style="display:flex;gap:10px;justify-content:center">
+              <button type="button" onclick="phConfirmReply(false)"
+                class="btn secondary" style="min-width:90px;padding:8px 18px">Cancelar</button>
+              <button type="button" id="phConfirmOkBtn" onclick="phConfirmReply(true)"
+                style="min-width:90px;padding:8px 18px;background:#ef4444;border:none;
+                  border-radius:10px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;
+                  transition:opacity .15s" onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Diagnostic modal ───────────────────────────────── -->
+        <div class="diag-overlay" id="schedDiagOverlay" onclick="if(event.target===this)closeSchedDiag()">
+          <div class="diag-modal" style="padding:22px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+              <div>
+                <div style="font-weight:700;font-size:17px">Diagn&#243;stico antes de ativar</div>
+                <div id="schedDiagBotName" style="font-size:12px;color:var(--muted);margin-top:2px"></div>
+              </div>
+              <button onclick="closeSchedDiag()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
+            </div>
+            <div id="schedDiagItems" style="display:flex;flex-direction:column;gap:10px;min-height:80px">
+              <div style="text-align:center;padding:32px;color:var(--muted)">
+                <div style="font-size:28px;margin-bottom:8px">&#9203;</div>Verificando...
+              </div>
+            </div>
+            <div id="schedDiagFooter" style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end"></div>
+          </div>
+        </div>
+        <form id="schedActivateForm" method="post" action="/app/profiles/{p.id}/schedule/activate" style="display:none">
+          <input type="hidden" id="schedAutoReconnectInput" name="auto_reconnect" value="0">
+        </form>
+        <script>
+        function toggleSchedEdit(id) {{
+          var el = document.getElementById('sedit-row-' + id) || document.getElementById('sedit-' + id);
+          if (!el) return;
+          var visible = el.style.display !== 'none' && el.style.display !== '';
+          el.style.display = visible ? 'none' : 'table-row';
+        }}
+        function removeSchedSlot(id) {{
+          var row = document.getElementById('srow-' + id);
+          var edit = document.getElementById('sedit-row-' + id);
+          [row, edit].forEach(function(r) {{
+            if (r) {{ r.style.transition='opacity .2s'; r.style.opacity='0'; setTimeout(function(){{r.style.display='none';}},200); }}
+          }});
+        }}
+        /* ── Checkbox em lote ── */
+        function schedOnCheck(pid) {{
+          var cbs = document.querySelectorAll('.sched-cb[data-profile="'+pid+'"]:checked');
+          var bar = document.getElementById('schedBulkBar-'+pid);
+          var cnt = document.getElementById('schedBulkCount-'+pid);
+          var selAll = document.getElementById('schedSelAll-'+pid);
+          var total = document.querySelectorAll('.sched-cb[data-profile="'+pid+'"]').length;
+          if (bar) bar.style.display = cbs.length > 0 ? 'flex' : 'none';
+          if (cnt) cnt.textContent = cbs.length + (cbs.length===1?' selecionado':' selecionados');
+          if (selAll) selAll.indeterminate = cbs.length > 0 && cbs.length < total;
+          if (selAll) selAll.checked = cbs.length === total && total > 0;
+        }}
+        function schedToggleAll(pid, checked) {{
+          document.querySelectorAll('.sched-cb[data-profile="'+pid+'"]').forEach(function(cb){{ cb.checked=checked; }});
+          schedOnCheck(pid);
+        }}
+        function schedClearSel(pid) {{
+          document.querySelectorAll('.sched-cb[data-profile="'+pid+'"]').forEach(function(cb){{ cb.checked=false; }});
+          schedOnCheck(pid);
+        }}
+        function _schedSelected(pid) {{
+          return Array.from(document.querySelectorAll('.sched-cb[data-profile="'+pid+'"]:checked')).map(function(cb){{return cb.value;}});
+        }}
+        /* ── Custom confirm modal ── */
+        var _phConfirmResolve = null;
+        function phConfirm(title, msg, okLabel) {{
+          return new Promise(function(resolve) {{
+            _phConfirmResolve = resolve;
+            var el = document.getElementById('phConfirmOverlay');
+            if (!el) {{ resolve(window.confirm(msg)); return; }}
+            var titleEl = document.getElementById('phConfirmTitle');
+            var msgEl   = document.getElementById('phConfirmMsg');
+            var okEl    = document.getElementById('phConfirmOkBtn');
+            if (titleEl) titleEl.textContent = title  || 'Confirmar';
+            if (msgEl)   msgEl.textContent   = msg    || '';
+            if (okEl)    okEl.textContent    = okLabel|| 'Confirmar';
+            el.classList.add('open');
+          }});
+        }}
+        function phConfirmReply(result) {{
+          var el = document.getElementById('phConfirmOverlay');
+          if (el) el.classList.remove('open');
+          if (_phConfirmResolve) {{ _phConfirmResolve(result); _phConfirmResolve = null; }}
+        }}
+        document.addEventListener('keydown', function(e) {{
+          if (e.key === 'Escape') {{
+            var el = document.getElementById('phConfirmOverlay');
+            if (el && el.classList.contains('open')) phConfirmReply(false);
+          }}
+        }});
+        /* ── Excluir post individual ── */
+        function schedDeletePost(pid, postId) {{
+          phConfirm('Excluir post agendado', 'Este post ser\u00e1 cancelado e removido da fila.', 'Excluir').then(function(ok) {{
+            if (!ok) return;
+            var f = document.createElement('form');
+            f.method='post'; f.action='/app/profiles/'+pid+'/schedule/posts/'+postId+'/cancel';
+            document.body.appendChild(f); f.submit();
+          }});
+        }}
+        /* ── Excluir todos agendados ── */
+        function schedDeleteAll(pid, count) {{
+          phConfirm('Excluir todos os agendados', 'Cancelar todos os ' + count + ' post(s) agendado(s)?', 'Excluir todos').then(function(ok) {{
+            if (!ok) return;
+            var f = document.createElement('form');
+            f.method='post'; f.action='/app/profiles/'+pid+'/schedule/cancel';
+            document.body.appendChild(f); f.submit();
+          }});
+        }}
+        function schedBulkDelete(pid) {{
+          var ids = _schedSelected(pid);
+          if (!ids.length) return;
+          var realIds = ids.filter(function(id) {{
+            var row = document.querySelector('.sched-row[data-id="'+id+'"]');
+            return row && row.dataset.type === 'real';
+          }});
+          var projIds = ids.filter(function(id) {{
+            var row = document.querySelector('.sched-row[data-id="'+id+'"]');
+            return !row || row.dataset.type !== 'real';
+          }});
+          phConfirm('Excluir selecionados', 'Cancelar e remover ' + ids.length + ' post(s) da fila?', 'Excluir').then(function(ok) {{
+            if (!ok) return;
+            // Projeções: remove da tela
+            projIds.forEach(function(id) {{ removeSchedSlot(id); }});
+            if (realIds.length === 0) {{ schedClearSel(pid); return; }}
+            // Posts reais: cancela via fetch (evita navegar múltiplas vezes)
+            var body = new URLSearchParams();
+            realIds.forEach(function(id) {{ body.append('post_ids', id); }});
+            fetch('/app/profiles/'+pid+'/schedule/posts/bulk-cancel', {{
+              method:'POST',
+              credentials:'same-origin',
+              headers: {{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}},
+              body: body.toString()
+            }}).then(function() {{
+              window.location.href = '/app/profiles/'+pid+'?tab=agendamento';
+            }}).catch(function() {{
+              window.location.href = '/app/profiles/'+pid+'?tab=agendamento';
+            }});
+          }});
+        }}
+        function schedBulkEdit(pid) {{
+          var ids = _schedSelected(pid);
+          if (!ids.length) return;
+          document.getElementById('schedBulkEditModal-'+pid).style.display = 'block';
+        }}
+        function schedRemoveAllSlots(pid) {{
+          phConfirm('Remover todos os slots', 'Remover todos os slots da proje\u00e7\u00e3o da tela?', 'Remover').then(function(ok) {{
+            if (!ok) return;
+            document.querySelectorAll('#schedTbody-'+pid+' tr').forEach(function(r) {{
+              r.style.transition='opacity .15s'; r.style.opacity='0';
+              setTimeout(function(){{ r.style.display='none'; }}, 160);
+            }});
+            var bar = document.getElementById('schedBulkBar-'+pid);
+            if (bar) bar.style.display='none';
+            schedClearSel(pid);
+          }});
+        }}
+        function schedBulkEditConfirm(pid) {{
+          var dt = document.getElementById('schedBulkDateTime-'+pid).value;
+          if (!dt) {{ alert('Escolha uma data/hora.'); return; }}
+          var ids = _schedSelected(pid);
+          if (!ids.length) return;
+          // Para posts reais, reagendar o primeiro e recalcular os demais com offset
+          // Para projeção, atualiza visualmente a data/hora nas cells
+          var date = dt.split('T')[0].split('-').reverse().join('/');
+          var time = dt.split('T')[1] || '';
+          ids.forEach(function(id) {{
+            var row = document.querySelector('.sched-row[data-id="'+id+'"]');
+            if (!row) return;
+            if (row.dataset.type === 'real') {{
+              var f = document.createElement('form');
+              f.method='post'; f.action='/app/profiles/'+pid+'/schedule/posts/'+id+'/reschedule';
+              var inp = document.createElement('input'); inp.type='hidden'; inp.name='run_at'; inp.value=dt;
+              f.appendChild(inp); document.body.appendChild(f); f.submit();
+            }} else {{
+              var cells = row.querySelectorAll('td');
+              if (cells[3]) cells[3].textContent = date;
+              if (cells[4]) {{ cells[4].innerHTML = '<b>'+time+'</b>'; }}
+            }}
+          }});
+          document.getElementById('schedBulkEditModal-'+pid).style.display = 'none';
+        }}
+        function openSchedDiag(botId) {{
+          document.getElementById('schedDiagOverlay').classList.add('open');
+          if (typeof window._phPlayInfoSound === 'function') window._phPlayInfoSound();
+          document.getElementById('schedDiagItems').innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:28px;margin-bottom:8px">&#9203;</div>Verificando configura&#231;&#245;es...</div>';
+          document.getElementById('schedDiagFooter').innerHTML = '';
+          fetch('/app/robot/diagnose?bot_id=' + encodeURIComponent(botId), {{credentials:'same-origin'}})
+            .then(function(r) {{ if (!r.ok) throw new Error('HTTP '+r.status); return r.json(); }})
+            .then(function(data) {{
+              var nameEl = document.getElementById('schedDiagBotName');
+              if (nameEl && data.bot_name) nameEl.textContent = 'Bot: ' + data.bot_name;
+              var icons = {{ok:'&#9989;',warn:'&#9888;&#65039;',err:'&#10060;'}};
+              var out = '';
+              (data.results||[]).forEach(function(item) {{
+                out += '<div class="diag-item '+item.status+'" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
+                out += '<div style="display:flex;align-items:flex-start;gap:10px">';
+                out += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">'+(icons[item.status]||'&bull;')+'</span>';
+                out += '<div style="flex:1"><div style="font-weight:600;font-size:14px;margin-bottom:3px">'+item.label+'</div>';
+                if (item.desc) out += '<div style="font-size:12px;color:var(--muted);line-height:1.5">'+item.desc+'</div>';
+                if (item.fix) out += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.15);border-radius:7px;line-height:1.5">'+item.fix+'</div>';
+                out += '</div></div></div>';
+              }});
+              var snd = (typeof window._phSoundLabel === 'function') ? window._phSoundLabel() : '&#129534; Caixa';
+              if (data.summary) {{
+                var s = data.summary;
+                var iT = s.interval_minutes > 0 ? s.interval_minutes+' min entre posts' : 'sem intervalo';
+                out += '<div style="margin-top:14px;padding:14px 16px;background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.2);border-radius:12px;font-size:13px">';
+                out += '<div style="font-weight:700;margin-bottom:10px">&#128203; Resumo</div>';
+                out += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px">';
+                out += '<div><span style="color:var(--muted)">Posts:</span> <b>'+s.posts_per_day+'</b></div>';
+                out += '<div><span style="color:var(--muted)">Intervalo:</span> <b>'+iT+'</b></div>';
+                out += '<div><span style="color:var(--muted)">Som:</span> <b>'+snd+'</b></div>';
+                if (s.wp_url) out += '<div style="grid-column:1/-1"><span style="color:var(--muted)">Site:</span> <b>'+s.wp_url+'</b></div>';
+                out += '</div></div>';
+              }}
+              document.getElementById('schedDiagItems').innerHTML = out;
+              var footer = '<button type="button" class="btn secondary" onclick="closeSchedDiag()" style="min-width:80px">Fechar</button>';
+              if (data.can_start) {{
+                footer += '<button type="button" class="btn" onclick="confirmSchedActivate(false)" style="min-width:150px;background:#10b981;border-color:#10b981;color:#fff">&#9654; Ativar agendamento</button>';
+              }} else if (data.can_reconnect_start) {{
+                footer += '<button type="button" class="btn" onclick="confirmSchedActivate(true)" style="min-width:180px;background:#10b981;border-color:#10b981;color:#fff">&#8635; Reconectar e ativar</button>';
+              }} else {{
+                footer += '<button type="button" class="btn" disabled style="min-width:150px;opacity:.4;cursor:not-allowed">&#9654; Ativar agendamento</button>';
+              }}
+              document.getElementById('schedDiagFooter').innerHTML = footer;
+            }})
+            .catch(function(err) {{
+              document.getElementById('schedDiagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">&#10060; Erro: '+err.message+'</div>';
+              document.getElementById('schedDiagFooter').innerHTML = '<button type="button" class="btn secondary" onclick="closeSchedDiag()">Fechar</button>';
+            }});
+        }}
+        function closeSchedDiag() {{
+          document.getElementById('schedDiagOverlay').classList.remove('open');
+        }}
+        function confirmSchedActivate(autoReconnect) {{
+          document.getElementById('schedAutoReconnectInput').value = autoReconnect ? '1' : '0';
+          closeSchedDiag();
+          document.getElementById('schedActivateForm').submit();
+        }}
+        </script>
         """
     elif tab == "posts":
         return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
@@ -4222,6 +5054,8 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             )
             _ip_site_prompt = (_ip_site_action.prompt_text if _ip_site_action else "").strip()
             _ip_fb_prompt   = (_ip_fb_action.prompt_text   if _ip_fb_action   else "").strip()
+            _ip_sv1, _ip_sv2, _ip_sv3, _ip_smode = _parse_prompt_variants(_ip_site_prompt)
+            _ip_fv1, _ip_fv2, _ip_fv3, _ip_fmode = _parse_prompt_variants(_ip_fb_prompt)
             _ip_open = "open" if (_ip.active or _ip.id == p.id) else ""
             _ip_name_esc = html.escape(_ip.name)
             _ip_id = _ip.id
@@ -4230,13 +5064,20 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             else:
                 _ip_badge = "<span class='badge-inactive' style='font-size:10px;padding:2px 7px;opacity:.8'><span class='dot-off'></span>Inativo</span>"
             _ip_wp_status = ("<span style='margin-left:auto;font-size:10px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:2px 8px;border-radius:20px'>&#9679; Configurado</span>"
-                             if _ip_site_prompt else
+                             if _ip_sv1 else
                              "<span style='margin-left:auto;font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);padding:2px 8px;border-radius:20px'>Vazio</span>")
             _ip_fb_status  = ("<span style='margin-left:auto;font-size:10px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:2px 8px;border-radius:20px'>&#9679; Configurado</span>"
-                              if _ip_fb_prompt else
+                              if _ip_fv1 else
                               "<span style='margin-left:auto;font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);padding:2px 8px;border-radius:20px'>Vazio</span>")
-            _ip_site_esc = html.escape(_ip_site_prompt)
-            _ip_fb_esc   = html.escape(_ip_fb_prompt)
+            # mode badge labels
+            _mode_labels = {"1": "Prompt 1", "2": "Prompt 2", "3": "Prompt 3", "random": "Aleat&#243;rio"}
+            _ip_smode_sel = {k: ("selected" if k == _ip_smode else "") for k in ("1","2","3","random")}
+            _ip_fmode_sel = {k: ("selected" if k == _ip_fmode else "") for k in ("1","2","3","random")}
+            # prompt textarea escapes
+            _e = lambda s: html.escape(s or "")
+            _sv1e, _sv2e, _sv3e = _e(_ip_sv1), _e(_ip_sv2), _e(_ip_sv3)
+            _fv1e, _fv2e, _fv3e = _e(_ip_fv1), _e(_ip_fv2), _e(_ip_fv3)
+            _iid = _ip_id.replace("-", "")  # safe JS identifier
             body += f"""
             <div class="card" style="margin-bottom:14px">
               <details class="toggle-section" {_ip_open}>
@@ -4262,8 +5103,34 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                           </div>
                           {_ip_wp_status}
                         </div>
-                        <textarea name="site_prompt" placeholder="Ex: Reescreva o conte&#250;do como um artigo SEO em portugu&#234;s. Use H1, H2, par&#225;grafos curtos. Tom informativo e profissional..." style="height:220px;font-size:13px;resize:none">{_ip_site_esc}</textarea>
-                        <div style="margin-top:8px;font-size:11px;color:var(--muted)">Dica: inclua tom, formato (HTML/texto), comprimento e palavras-chave alvo.</div>
+                        <!-- Prompt tabs -->
+                        <div style="display:flex;gap:4px;margin-bottom:10px">
+                          <button type="button" id="swptab_{_iid}_1" onclick="phSwitchTab('{_iid}','wp',1)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(139,92,246,.35);cursor:pointer;background:rgba(139,92,246,.15);color:var(--fg);transition:all .15s">Prompt 1</button>
+                          <button type="button" id="swptab_{_iid}_2" onclick="phSwitchTab('{_iid}','wp',2)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(139,92,246,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 2</button>
+                          <button type="button" id="swptab_{_iid}_3" onclick="phSwitchTab('{_iid}','wp',3)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(139,92,246,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 3</button>
+                        </div>
+                        <div id="swp_{_iid}_1" style="display:block">
+                          <textarea name="site_prompt_1" placeholder="Prompt 1: Reescreva a receita em portugu&#234;s com tom acolhedor e SEO completo..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_sv1e}</textarea>
+                        </div>
+                        <div id="swp_{_iid}_2" style="display:none">
+                          <textarea name="site_prompt_2" placeholder="Prompt 2: Reescreva com tom mais t&#233;cnico e detalhado, focando em dicas de nutri&#231;&#227;o..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_sv2e}</textarea>
+                        </div>
+                        <div id="swp_{_iid}_3" style="display:none">
+                          <textarea name="site_prompt_3" placeholder="Prompt 3: Reescreva com linguagem descontra&#237;da, voltada para p&#250;blico jovem..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_sv3e}</textarea>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+                          <span style="font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap">Bot usa:</span>
+                          <select name="site_prompt_mode" style="flex:1;font-size:12px;padding:5px 8px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--fg)">
+                            <option value="1" {_ip_smode_sel["1"]}>Prompt 1</option>
+                            <option value="2" {_ip_smode_sel["2"]}>Prompt 2</option>
+                            <option value="3" {_ip_smode_sel["3"]}>Prompt 3</option>
+                            <option value="random" {_ip_smode_sel["random"]}>&#127922; Aleat&#243;rio</option>
+                          </select>
+                        </div>
+                        <div style="margin-top:6px;font-size:11px;color:var(--muted)">Dica: cada prompt pode ter um estilo diferente — o bot usa o selecionado (ou sorteia no Aleat&#243;rio).</div>
                       </div>
                       <!-- Facebook prompt -->
                       <div class="card" style="padding:20px;border-top:3px solid #1877f2;display:flex;flex-direction:column;height:100%;box-sizing:border-box;margin-top:0">
@@ -4277,8 +5144,34 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                           </div>
                           {_ip_fb_status}
                         </div>
-                        <textarea name="facebook_prompt" placeholder="Ex: Crie um post curto e envolvente. Use 2-3 par&#225;grafos, emojis relevantes, termine com uma pergunta para engajar..." style="height:220px;font-size:13px;resize:none">{_ip_fb_esc}</textarea>
-                        <div style="margin-top:8px;font-size:11px;color:var(--muted)">Dica: posts curtos funcionam melhor. Use emojis e chamadas para a&#231;&#227;o.</div>
+                        <!-- Prompt tabs -->
+                        <div style="display:flex;gap:4px;margin-bottom:10px">
+                          <button type="button" id="sfbtab_{_iid}_1" onclick="phSwitchTab('{_iid}','fb',1)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(24,119,242,.35);cursor:pointer;background:rgba(24,119,242,.12);color:var(--fg);transition:all .15s">Prompt 1</button>
+                          <button type="button" id="sfbtab_{_iid}_2" onclick="phSwitchTab('{_iid}','fb',2)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(24,119,242,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 2</button>
+                          <button type="button" id="sfbtab_{_iid}_3" onclick="phSwitchTab('{_iid}','fb',3)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(24,119,242,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 3</button>
+                        </div>
+                        <div id="sfb_{_iid}_1" style="display:block">
+                          <textarea name="facebook_prompt_1" placeholder="Prompt 1: Crie um post curto e envolvente com emojis e CTA..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_fv1e}</textarea>
+                        </div>
+                        <div id="sfb_{_iid}_2" style="display:none">
+                          <textarea name="facebook_prompt_2" placeholder="Prompt 2: Post mais informativo, destacando benef&#237;cios da receita..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_fv2e}</textarea>
+                        </div>
+                        <div id="sfb_{_iid}_3" style="display:none">
+                          <textarea name="facebook_prompt_3" placeholder="Prompt 3: Post descontra&#237;do com humor leve e emojis..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_fv3e}</textarea>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+                          <span style="font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap">Bot usa:</span>
+                          <select name="facebook_prompt_mode" style="flex:1;font-size:12px;padding:5px 8px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--fg)">
+                            <option value="1" {_ip_fmode_sel["1"]}>Prompt 1</option>
+                            <option value="2" {_ip_fmode_sel["2"]}>Prompt 2</option>
+                            <option value="3" {_ip_fmode_sel["3"]}>Prompt 3</option>
+                            <option value="random" {_ip_fmode_sel["random"]}>&#127922; Aleat&#243;rio</option>
+                          </select>
+                        </div>
+                        <div style="margin-top:6px;font-size:11px;color:var(--muted)">Dica: posts curtos funcionam melhor. Use emojis e chamadas para a&#231;&#227;o.</div>
                       </div>
                     </div>
                     <div style="display:flex;justify-content:flex-end">
@@ -4322,9 +5215,7 @@ def profile_schedule_save(
     s = (start_at or "").strip()
     if s:
         try:
-            local = datetime.fromisoformat(s)
-            local = local.replace(tzinfo=_user_zoneinfo(user))
-            utc = local.astimezone(timezone.utc)
+            utc = _local_input_to_utc_naive(s, user=user).replace(tzinfo=timezone.utc)
             cfg["start_at_utc"] = utc.isoformat().replace("+00:00", "Z")
         except Exception:
             cfg["start_at_utc"] = ""
@@ -4341,11 +5232,207 @@ def profile_schedule_save(
     return RedirectResponse(f"/app/profiles/{p.id}?tab={_safe_next}&msg={quote_plus('Cadência salva.')}", status_code=status.HTTP_302_FOUND)
 
 
+@router.post("/app/profiles/{profile_id}/schedule/activate", include_in_schema=False)
+def profile_schedule_activate(
+    profile_id: str,
+    auto_reconnect: str = Form("0"),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Ativa o agendamento: roda como Iniciar mas respeitando a config salva (start_at_utc + intervalo)."""
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    # Validate WP connection first (same as robot_start)
+    try:
+        wp_integ, _wp_creds, active_user, base_url = _wordpress_connection_for_bot(db, bot_id=p.id)
+    except Exception:
+        wp_integ, active_user, base_url = None, None, ""
+    if not wp_integ or not base_url or not active_user or not active_user.get("username") or not active_user.get("app_password"):
+        return RedirectResponse(
+            f"/app/profiles/{p.id}?tab=agendamento&msg={quote_plus('WordPress não configurado. Configure antes de ativar.')}",
+            status_code=status.HTTP_302_FOUND,
+        )
+    if str(auto_reconnect) == "1":
+        _try_reconnect_wordpress(db, wp_integ, base_url=base_url, active_user=active_user)
+        db.commit()
+    # Check no active queue
+    p.active = True
+    _ensure_publish_config_defaults(db, bot=p)
+    db.add(p)
+    revived = _revive_profile_queue(db, profile_id=p.id)
+    _active = int(db.scalar(
+        select(func.count()).select_from(Job).where(
+            Job.profile_id == p.id,
+            Job.status.in_([JobStatus.queued, JobStatus.running])
+        )
+    ) or 0)
+    _active_posts = int(db.scalar(
+        select(func.count()).select_from(Post).where(
+            Post.profile_id == p.id,
+            Post.status.in_([PostStatus.pending, PostStatus.processing]),
+        )
+    ) or 0)
+    if (_active + _active_posts) > 0:
+        db.commit()
+        msg = "Fila retomada e em andamento." if revived else "Ja existe uma fila ativa. Acompanhe em Posts."
+        return RedirectResponse(f"/app/posts?msg={quote_plus(msg)}", status_code=status.HTTP_302_FOUND)
+    cfg = p.schedule_config_json or {}
+    limit = int(cfg.get("posts_per_day") or 15)
+    respect = int(cfg.get("respect_schedule") or 0) == 1
+    interval_minutes = int(cfg.get("interval_minutes") or 0)
+    # Clear all existing posts so the bot counts from zero on this new run.
+    # keep_collected=True preserves URL fingerprints so the collector never re-posts the same article.
+    _all_post_ids = list(db.scalars(select(Post.id).where(Post.profile_id == p.id)))
+    if _all_post_ids:
+        _delete_posts(db, profile_id=p.id, post_ids=[str(x) for x in _all_post_ids], keep_collected=True)
+    enqueue_job(
+        db,
+        user_id=p.user_id,
+        profile_id=p.id,
+        job_type=JOB_COLLECT,
+        payload={"limit": limit, "interval_minutes": interval_minutes, "respect_schedule": 1 if respect else 0},
+    )
+    db.commit()
+    return RedirectResponse(
+        f"/app/posts?msg={quote_plus('Agendamento ativado! Posts sendo enfileirados.')}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.post("/app/profiles/{profile_id}/schedule/posts/{post_id}/cancel", include_in_schema=False)
+def profile_schedule_post_cancel(
+    profile_id: str,
+    post_id: str,
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Cancela um post agendado específico e seus jobs pendentes."""
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    post = db.scalar(select(Post).where(Post.id == post_id, Post.profile_id == p.id))
+    if not post:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    _cancel_posts(db, profile_id=p.id, post_ids=[post.id], user=user)
+    db.commit()
+    return RedirectResponse(
+        f"/app/profiles/{p.id}?tab=agendamento&msg={quote_plus('Post cancelado.')}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.post("/app/profiles/{profile_id}/schedule/posts/bulk-cancel", include_in_schema=False)
+def profile_schedule_posts_bulk_cancel(
+    profile_id: str,
+    post_ids: list[str] = Form(default=[]),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    ids = [str(x).strip() for x in post_ids if str(x).strip()]
+    if ids:
+        ids = list(db.scalars(select(Post.id).where(
+            Post.profile_id == p.id,
+            Post.id.in_(ids),
+            Post.status.in_([PostStatus.pending, PostStatus.processing]),
+        )))
+        _cancel_posts(db, profile_id=p.id, post_ids=[str(x) for x in ids], user=user)
+    db.commit()
+    return RedirectResponse(
+        f"/app/profiles/{p.id}?tab=agendamento&msg={quote_plus(f'{len(ids)} post(s) cancelado(s).')}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.post("/app/profiles/{profile_id}/schedule/posts/{post_id}/reschedule", include_in_schema=False)
+def profile_schedule_post_reschedule(
+    profile_id: str,
+    post_id: str,
+    run_at: str = Form(""),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Reagenda um post específico para nova data/hora."""
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    post = db.scalar(select(Post).where(Post.id == post_id, Post.profile_id == p.id))
+    if not post:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if not run_at:
+        return RedirectResponse(
+            f"/app/profiles/{p.id}?tab=agendamento&err={quote_plus('Data/hora inválida.')}",
+            status_code=status.HTTP_302_FOUND,
+        )
+    try:
+        new_dt = _local_input_to_utc_naive(run_at, user=user)
+    except Exception:
+        return RedirectResponse(
+            f"/app/profiles/{p.id}?tab=agendamento&err={quote_plus('Formato de data inválido.')}",
+            status_code=status.HTTP_302_FOUND,
+        )
+    from sqlalchemy import update as _upd
+    db.execute(
+        _upd(Job).where(
+            Job.post_id == post.id,
+            Job.status == JobStatus.queued,
+        ).values(run_at=new_dt)
+    )
+    db.commit()
+    return RedirectResponse(
+        f"/app/profiles/{p.id}?tab=agendamento&msg={quote_plus('Post reagendado com sucesso.')}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.post("/app/profiles/{profile_id}/schedule/cancel", include_in_schema=False)
+def profile_schedule_cancel(
+    profile_id: str,
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Cancela todos os jobs e posts pendentes do perfil."""
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    ids = list(db.scalars(select(Post.id).where(
+        Post.profile_id == p.id,
+        Post.status.in_([PostStatus.pending, PostStatus.processing]),
+    )))
+    cancelled_posts = len(ids)
+    before_jobs = int(db.scalar(select(func.count()).select_from(Job).where(
+        Job.profile_id == p.id,
+        Job.status.in_([JobStatus.queued, JobStatus.running]),
+    )) or 0)
+    _cancel_posts(db, profile_id=p.id, post_ids=[str(x) for x in ids], user=user)
+    db.execute(
+        update(Job)
+        .where(Job.profile_id == p.id, Job.status.in_([JobStatus.queued, JobStatus.running]))
+        .values(status=JobStatus.failed, last_error="canceled_by_user", locked_at=None, locked_by=None, updated_at=datetime.utcnow())
+    )
+    cancelled_jobs = before_jobs
+    db.commit()
+    msg = f"Cancelado: {cancelled_jobs} job(s) e {cancelled_posts} post(s) pendente(s)."
+    return RedirectResponse(
+        f"/app/profiles/{p.id}?tab=agendamento&msg={quote_plus(msg)}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
 @router.post("/app/profiles/{profile_id}/ai-prompts", include_in_schema=False)
 def profile_ai_prompts_save(
     profile_id: str,
-    site_prompt: str = Form(""),
-    facebook_prompt: str = Form(""),
+    site_prompt_1: str = Form(""),
+    site_prompt_2: str = Form(""),
+    site_prompt_3: str = Form(""),
+    site_prompt_mode: str = Form("1"),
+    facebook_prompt_1: str = Form(""),
+    facebook_prompt_2: str = Form(""),
+    facebook_prompt_3: str = Form(""),
+    facebook_prompt_mode: str = Form("1"),
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -4353,6 +5440,16 @@ def profile_ai_prompts_save(
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     _ensure_default_recipe_actions(db, bot=p)
+
+    def _build_prompt_json(v1: str, v2: str, v3: str, mode: str) -> str:
+        v1 = (v1 or "").strip()
+        v2 = (v2 or "").strip()
+        v3 = (v3 or "").strip()
+        mode = (mode or "1").strip()
+        if mode not in ("1", "2", "3", "random"):
+            mode = "1"
+        return json.dumps({"mode": mode, "v": [v1, v2, v3]}, ensure_ascii=False)
+
     site_action = db.scalar(
         select(AiAction)
         .where(AiAction.profile_id == p.id, AiAction.destination == ActionDestination.WORDPRESS)
@@ -4365,8 +5462,8 @@ def profile_ai_prompts_save(
         .order_by(AiAction.created_at.asc())
         .limit(1)
     )
-    sp = (site_prompt or "").strip()
-    fp = (facebook_prompt or "").strip()
+    sp = _build_prompt_json(site_prompt_1, site_prompt_2, site_prompt_3, site_prompt_mode)
+    fp = _build_prompt_json(facebook_prompt_1, facebook_prompt_2, facebook_prompt_3, facebook_prompt_mode)
     if site_action:
         site_action.prompt_text = sp
         site_action.active = True
@@ -4414,19 +5511,37 @@ def _cancel_posts(db, *, profile_id: str, post_ids: list[str], user: User):
     if post_ids:
         db.execute(
             update(Job)
-            .where(Job.profile_id == profile_id, Job.post_id.in_(post_ids), Job.status == JobStatus.queued)
+            .where(Job.profile_id == profile_id, Job.post_id.in_(post_ids), Job.status.in_([JobStatus.queued, JobStatus.running]))
             .values(status=JobStatus.failed, last_error="canceled_by_user", locked_at=None, locked_by=None, updated_at=now)
         )
 
 
-def _delete_posts(db, *, profile_id: str, post_ids: list[str]):
+def _cancel_collect_jobs(db, *, profile_id: str) -> int:
+    now = datetime.utcnow()
+    result = db.execute(
+        update(Job)
+        .where(
+            Job.profile_id == profile_id,
+            Job.type == JOB_COLLECT,
+            Job.status.in_([JobStatus.queued, JobStatus.running]),
+        )
+        .values(status=JobStatus.failed, last_error="canceled_by_user", locked_at=None, locked_by=None, updated_at=now)
+    )
+    return int(result.rowcount or 0)
+
+
+def _delete_posts(db, *, profile_id: str, post_ids: list[str], keep_collected: bool = False):
+    """Delete posts and associated jobs/logs.
+    keep_collected=True: preserve CollectedContent records (keeps URL fingerprints for deduplication).
+    keep_collected=False (default): also deletes CollectedContent records.
+    """
     posts = list(db.scalars(select(Post).where(Post.profile_id == profile_id, Post.id.in_(post_ids))))
-    content_ids = [p.collected_content_id for p in posts]
+    content_ids = [p.collected_content_id for p in posts if p.collected_content_id]
     if post_ids:
         db.query(JobLog).filter(JobLog.profile_id == profile_id, JobLog.post_id.in_(post_ids)).delete(synchronize_session=False)
         db.query(Job).filter(Job.profile_id == profile_id, Job.post_id.in_(post_ids)).delete(synchronize_session=False)
         db.query(Post).filter(Post.profile_id == profile_id, Post.id.in_(post_ids)).delete(synchronize_session=False)
-    if content_ids:
+    if content_ids and not keep_collected:
         db.query(CollectedContent).filter(CollectedContent.profile_id == profile_id, CollectedContent.id.in_(content_ids)).delete(
             synchronize_session=False
         )
@@ -4474,7 +5589,12 @@ def profile_post_correct(profile_id: str, post_id: str, user: User = Depends(get
     if active_job:
         return RedirectResponse("/app/posts?msg=Este+post+j%C3%A1+est%C3%A1+em+corre%C3%A7%C3%A3o.", status_code=status.HTTP_302_FOUND)
     outputs = dict(post.outputs_json or {})
+    # Clear all previously generated content so the AI produces a fresh rewrite
     outputs.pop("recipe", None)
+    outputs.pop("image", None)
+    for k in list(outputs.keys()):
+        if isinstance(k, str) and (k.startswith("wordpress:") or k.startswith("facebook:")):
+            outputs.pop(k, None)
     outputs["correction_requested"] = True
     post.outputs_json = outputs
     post.status = PostStatus.processing
@@ -4552,9 +5672,11 @@ def profile_posts_cancel_all(profile_id: str, user: User = Depends(get_current_u
     ids = list(
         db.scalars(select(Post.id).where(Post.profile_id == p.id, Post.status.in_([PostStatus.pending, PostStatus.processing])))
     )
-    if not ids:
+    canceled_collect = _cancel_collect_jobs(db, profile_id=p.id)
+    if not ids and not canceled_collect:
         return RedirectResponse("/app/posts?msg=Nenhum+post+pendente+para+cancelar.", status_code=status.HTTP_302_FOUND)
-    _cancel_posts(db, profile_id=p.id, post_ids=[str(x) for x in ids], user=user)
+    if ids:
+        _cancel_posts(db, profile_id=p.id, post_ids=[str(x) for x in ids], user=user)
     db.commit()
     return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
 
@@ -4915,6 +6037,7 @@ def profile_publish_facebook(
     facebook_link: str = Form("comments"),
     facebook_enabled: str = Form(""),
     facebook_page_ids: list[str] = Form([]),
+    facebook_image: str = Form("link_preview"),
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -4925,10 +6048,12 @@ def profile_publish_facebook(
     cfg["facebook_link"] = "body" if facebook_link == "body" else "comments"
     cfg["facebook_enabled"] = True if str(facebook_enabled or "").strip() == "1" else False
     cfg["facebook_page_ids"] = [str(x).strip() for x in (facebook_page_ids or []) if str(x).strip()]
+    _img = str(facebook_image or "link_preview").strip()
+    cfg["facebook_image"] = _img if _img in ("link_preview", "direct_photo", "none") else "link_preview"
     p.publish_config_json = cfg
     db.add(p)
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=publicacao&ptab=facebook&msg={quote_plus('Configuração do Facebook salva.')}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/integrations/facebook/pages/add", include_in_schema=False)
@@ -5019,6 +6144,193 @@ def profile_facebook_pages_remove(
     return RedirectResponse(f"/app/profiles/{p.id}?tab=integracoes&msg={quote_plus('Página removida.')}", status_code=status.HTTP_302_FOUND)
 
 
+@router.post("/app/profiles/{profile_id}/integrations/facebook/pages/test", include_in_schema=False)
+def profile_facebook_pages_test(
+    profile_id: str,
+    page_id: str = Form(...),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    from fastapi.responses import JSONResponse
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    pid = str(page_id or "").strip()
+    if not pid:
+        return JSONResponse({"ok": False, "error": "missing_page_id"}, status_code=400)
+    integ = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.FACEBOOK))
+    if not integ:
+        return JSONResponse({"ok": False, "error": "Integração do Facebook não configurada."})
+    try:
+        creds = decrypt_json(integ.credentials_encrypted)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Erro ao ler credenciais."})
+    pages_val = creds.get("pages") if isinstance(creds, dict) else None
+    pages = [x for x in pages_val if isinstance(x, dict)] if isinstance(pages_val, list) else []
+    token = ""
+    for pg in pages:
+        if str(pg.get("page_id") or "").strip() == pid:
+            token = str(pg.get("access_token") or "").strip()
+            break
+    if not token:
+        return JSONResponse({"ok": False, "error": "Token não encontrado para esta página."})
+    from app.services.facebook import test_page_token as _test_fb_token
+    result = _test_fb_token(page_id=pid, page_access_token=token)
+    return JSONResponse(result)
+
+
+@router.get("/app/oauth/facebook/start", include_in_schema=False)
+def facebook_oauth_start(
+    profile_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    integ = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.FACEBOOK))
+    app_id = ""
+    if integ:
+        try:
+            creds = decrypt_json(integ.credentials_encrypted)
+            app_id = str(creds.get("oauth_app_id") or "").strip()
+        except Exception:
+            pass
+    if not app_id:
+        return RedirectResponse(f"/app/profiles/{profile_id}?tab=integracoes&itab=facebook&msg={quote_plus('Configure o App ID primeiro.')}", status_code=302)
+    state = f"{profile_id}:{secrets.token_hex(16)}"
+    request.session["fb_oauth_state"] = state
+    base = str(request.base_url).rstrip("/")
+    callback_url = f"{base}/app/oauth/facebook/callback"
+    redirect_url = (
+        f"https://www.facebook.com/v19.0/dialog/oauth"
+        f"?client_id={app_id}"
+        f"&redirect_uri={quote_plus(callback_url)}"
+        f"&scope=pages_manage_posts%2Cpages_show_list"
+        f"&response_type=code"
+        f"&state={state}"
+    )
+    return RedirectResponse(redirect_url, status_code=302)
+
+
+@router.get("/app/oauth/facebook/callback", include_in_schema=False)
+def facebook_oauth_callback(
+    request: Request,
+    code: str = None,
+    state: str = None,
+    error: str = None,
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    import httpx as _httpx
+    if error:
+        return RedirectResponse(f"/app?msg={quote_plus('Facebook OAuth cancelado.')}", status_code=302)
+    saved_state = request.session.get("fb_oauth_state", "")
+    if not saved_state or saved_state != state:
+        raise HTTPException(status_code=400, detail="invalid_state")
+    profile_id = (state or "").split(":")[0]
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=404)
+    integ = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.FACEBOOK))
+    if not integ:
+        return RedirectResponse(f"/app/profiles/{profile_id}?tab=integracoes&itab=facebook&msg={quote_plus('Integração não configurada.')}", status_code=302)
+    try:
+        creds = decrypt_json(integ.credentials_encrypted)
+    except Exception:
+        creds = {}
+    app_id = str(creds.get("oauth_app_id") or "").strip()
+    app_secret = str(creds.get("oauth_app_secret") or "").strip()
+    if not app_id or not app_secret:
+        return RedirectResponse(f"/app/profiles/{profile_id}?tab=integracoes&itab=facebook&msg={quote_plus('App ID ou Secret não configurados.')}", status_code=302)
+    base = str(request.base_url).rstrip("/")
+    callback_url = f"{base}/app/oauth/facebook/callback"
+    try:
+        r = _httpx.get("https://graph.facebook.com/v19.0/oauth/access_token", params={
+            "client_id": app_id, "client_secret": app_secret,
+            "redirect_uri": callback_url, "code": code,
+        }, timeout=15)
+        token_data = r.json()
+        user_token = str(token_data.get("access_token") or "").strip()
+        if not user_token:
+            raise ValueError(str(token_data))
+        r2 = _httpx.get("https://graph.facebook.com/v19.0/oauth/access_token", params={
+            "grant_type": "fb_exchange_token", "client_id": app_id,
+            "client_secret": app_secret, "fb_exchange_token": user_token,
+        }, timeout=15)
+        ll_token = str(r2.json().get("access_token") or user_token).strip()
+        r3 = _httpx.get("https://graph.facebook.com/v19.0/me/accounts", params={
+            "access_token": ll_token, "fields": "id,name,access_token",
+        }, timeout=15)
+        pages_data = r3.json().get("data") or []
+    except Exception as exc:
+        return RedirectResponse(f"/app/profiles/{profile_id}?tab=integracoes&itab=facebook&msg={quote_plus(f'Erro OAuth: {str(exc)[:120]}')}", status_code=302)
+    existing_pages = [x for x in (creds.get("pages") or []) if isinstance(x, dict)]
+    existing_ids = {str(x.get("page_id") or "") for x in existing_pages}
+    added = 0
+    for pg in pages_data:
+        pid = str(pg.get("id") or "").strip()
+        ptoken = str(pg.get("access_token") or "").strip()
+        pname = str(pg.get("name") or "").strip()
+        if not pid or not ptoken:
+            continue
+        if pid not in existing_ids:
+            existing_pages.append({"page_id": pid, "name": pname, "access_token": ptoken})
+            existing_ids.add(pid)
+            added += 1
+        else:
+            for ep in existing_pages:
+                if str(ep.get("page_id") or "") == pid:
+                    ep["access_token"] = ptoken
+                    if pname:
+                        ep["name"] = pname
+    new_creds = dict(creds)
+    new_creds["pages"] = existing_pages
+    integ.credentials_encrypted = encrypt_json(new_creds)
+    integ.name = "Facebook"
+    db.add(integ)
+    db.commit()
+    msg = f"{added} página(s) adicionada(s) via OAuth." if added else "Tokens das páginas atualizados via OAuth."
+    return RedirectResponse(f"/app/profiles/{profile_id}?tab=integracoes&itab=facebook&msg={quote_plus(msg)}", status_code=302)
+
+
+@router.post("/app/profiles/{profile_id}/integrations/facebook/oauth-config", include_in_schema=False)
+def profile_facebook_oauth_config(
+    profile_id: str,
+    oauth_app_id: str = Form(""),
+    oauth_app_secret: str = Form(""),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    p = _get_profile_for_user(db, profile_id=profile_id, user=user)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    existing = db.scalar(select(Integration).where(Integration.profile_id == p.id, Integration.type == IntegrationType.FACEBOOK))
+    if existing:
+        try:
+            creds = decrypt_json(existing.credentials_encrypted)
+        except Exception:
+            creds = {}
+        creds = dict(creds)
+    else:
+        creds = {"pages": []}
+        existing = Integration(
+            id=str(__import__("uuid").uuid4()),
+            user_id=user.id,
+            profile_id=p.id,
+            type=IntegrationType.FACEBOOK,
+            name="Facebook",
+            status=__import__("app.models", fromlist=["IntegrationStatus"]).IntegrationStatus.CONNECTED,
+        )
+    creds["oauth_app_id"] = str(oauth_app_id or "").strip()
+    creds["oauth_app_secret"] = str(oauth_app_secret or "").strip()
+    existing.credentials_encrypted = encrypt_json(creds)
+    db.add(existing)
+    db.commit()
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=integracoes&itab=facebook&msg={quote_plus('App OAuth salvo.')}", status_code=302)
+
+
 @router.post("/app/profiles/{profile_id}/publish/wordpress", include_in_schema=False)
 def profile_publish_wordpress(
     profile_id: str,
@@ -5038,7 +6350,7 @@ def profile_publish_wordpress(
     p.publish_config_json = cfg
     db.add(p)
     db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=publicacao&ptab=wordpress&msg={quote_plus('Configuração do WordPress salva.')}", status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/app/actions", include_in_schema=False)
@@ -5074,6 +6386,47 @@ def integrations_wordpress(
     return RedirectResponse("/app/integrations", status_code=status.HTTP_302_FOUND)
 
 
+def _job_payload_limit(job: Job) -> int:
+    payload = job.payload_json if isinstance(job.payload_json, dict) else {}
+    try:
+        limit = int(payload.get("limit") or 0)
+    except Exception:
+        limit = 0
+    return max(0, limit)
+
+
+def _active_collect_plan(db, *, profile_id: str) -> dict:
+    jobs = list(db.scalars(
+        select(Job).where(
+            Job.profile_id == profile_id,
+            Job.type == JOB_COLLECT,
+            Job.status.in_([JobStatus.queued, JobStatus.running]),
+        )
+    ))
+    total_requested = sum(_job_payload_limit(j) for j in jobs)
+    if total_requested <= 0:
+        return {"missing": 0, "requested": 0, "materialized": 0, "running": False, "next_run": None}
+    first_created = min((j.created_at for j in jobs if j.created_at), default=None)
+    materialized = 0
+    if first_created:
+        materialized = int(db.scalar(
+            select(func.count()).select_from(Post).where(
+                Post.profile_id == profile_id,
+                Post.created_at >= first_created,
+            )
+        ) or 0)
+    missing = max(0, total_requested - materialized)
+    next_run = min((j.run_at for j in jobs if j.run_at), default=None)
+    running = any(j.status == JobStatus.running for j in jobs)
+    return {
+        "missing": missing,
+        "requested": total_requested,
+        "materialized": materialized,
+        "running": running,
+        "next_run": next_run,
+    }
+
+
 @router.get("/app/posts", include_in_schema=False)
 def posts_page(request: Request, user: User = Depends(get_current_user), db=Depends(get_db)):
     all_profiles = list(db.scalars(
@@ -5081,11 +6434,14 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         .where(AutomationProfile.user_id == user.id)
         .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
     ))
+    collect_plan_by_profile = {p.id: _active_collect_plan(db, profile_id=p.id) for p in all_profiles}
 
     # ── Global totals ────────────────────────────────────────────────────────
     all_ids = [p.id for p in all_profiles]
     total_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status == PostStatus.completed)) or 0) if all_ids else 0
-    total_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0) if all_ids else 0
+    total_pend_real = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0) if all_ids else 0
+    total_pend_planned = sum(int(plan.get("missing") or 0) for plan in collect_plan_by_profile.values())
+    total_pend = total_pend_real + total_pend_planned
     total_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status == PostStatus.failed)) or 0) if all_ids else 0
 
     # ── Summary bar ─────────────────────────────────────────────────────────
@@ -5138,18 +6494,20 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
     """
 
     # ── Table helper ─────────────────────────────────────────────────────────
-    def _ptable(tid, rows, empty_msg, last_col="Link", extra_col: str | None = None):
+    def _ptable(tid, rows, empty_msg, last_col="Link", extra_col: str | None = None, extra_col2: str | None = None):
+        th_style = "padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)"
         thead = (
             "<tr style='background:var(--surface2)'>"
-            "<th style='padding:10px 14px;width:36px'><input type='checkbox' style='width:14px;height:14px;cursor:pointer' onclick=\"var _h=this;var _t=document.getElementById('" + tid + "');_t.querySelectorAll('tbody input[name=post_id]').forEach(function(c){c.checked=_h.checked;});_phUpdateCount('" + tid + "');\"></th>"
-            "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>T\u00edtulo</th>"
-            "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Status</th>"
-            "<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>Quando</th>"
-            f"<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>{html.escape(last_col)}</th>"
-            + (f"<th style='padding:10px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)'>{html.escape(extra_col)}</th>" if extra_col else "")
+            f"<th style='{th_style};width:36px'><input type='checkbox' style='width:14px;height:14px;cursor:pointer' onclick=\"var _h=this;var _t=document.getElementById('" + tid + "');_t.querySelectorAll('tbody input[name=post_id]').forEach(function(c){c.checked=_h.checked;});_phUpdateCount('" + tid + "');\"></th>"
+            f"<th style='{th_style}'>T\u00edtulo</th>"
+            f"<th style='{th_style}'>Status</th>"
+            f"<th style='{th_style}'>Quando</th>"
+            f"<th style='{th_style}'>{html.escape(last_col)}</th>"
+            + (f"<th style='{th_style}'>{html.escape(extra_col)}</th>" if extra_col else "")
+            + (f"<th style='{th_style}'>{html.escape(extra_col2)}</th>" if extra_col2 else "")
             + "</tr>"
         )
-        colspan = 6 if extra_col else 5
+        colspan = 5 + (1 if extra_col else 0) + (1 if extra_col2 else 0)
         body_rows = rows or f"<tr><td colspan='{colspan}' style='padding:20px;text-align:center;color:var(--muted);font-size:13px'>{empty_msg}</td></tr>"
         # Add onchange to each checkbox in the rows
         if rows:
@@ -5182,7 +6540,10 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
 
         # counts
         c_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.completed)) or 0)
-        c_pend = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
+        c_pend_real = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
+        collect_plan = collect_plan_by_profile.get(pr.id) or {}
+        c_pend_planned = int(collect_plan.get("missing") or 0)
+        c_pend = c_pend_real + c_pend_planned
         c_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.failed)) or 0)
         _b_qd = int(db.scalar(select(func.count()).select_from(Job).where(
             Job.profile_id == pr.id, Job.status == JobStatus.queued)) or 0)
@@ -5192,7 +6553,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         # load posts per category
         def _load(statuses, limit=200):
             return list(db.execute(
-                select(Post, CollectedContent.title)
+                select(Post, CollectedContent.title, CollectedContent.canonical_url)
                 .join(CollectedContent, CollectedContent.id == Post.collected_content_id)
                 .where(Post.profile_id == pr.id, Post.status.in_(statuses))
                 .order_by(Post.published_at.desc().nullslast(), Post.created_at.desc())
@@ -5262,19 +6623,28 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
 
         def _build_pub_rows(items):
             out = ""
-            for p_obj, title in items:
+            for row in items:
+                p_obj = row[0]
+                title = row[1]
+                canonical_url = row[2] if len(row) > 2 else None
                 t = html.escape(str(title or "")[:80] + ("\u2026" if len(str(title or "")) > 80 else ""))
                 dt = html.escape(_fmt_dt(p_obj.published_at or p_obj.created_at, user=user))
+                dt_iso = (p_obj.published_at or p_obj.created_at or "").isoformat() if (p_obj.published_at or p_obj.created_at) else ""
                 chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer'/>"
                 wp_link = (f"<a href='{html.escape(p_obj.wp_url)}' target='_blank' rel='noopener' "
                            f"style='display:inline-flex;align-items:center;gap:4px;color:#10b981;font-size:12px;font-weight:600;text-decoration:none'>"
                            f"&#8599; Ver</a>") if p_obj.wp_url else "<span style='color:var(--muted);font-size:12px'>\u2014</span>"
+                src_link = (f"<a href='{html.escape(str(canonical_url))}' target='_blank' rel='noopener' "
+                            f"style='display:inline-flex;align-items:center;gap:4px;color:#6366f1;font-size:12px;text-decoration:none;max-width:200px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis' "
+                            f"title='{html.escape(str(canonical_url))}'>"
+                            f"&#8599; Fonte</a>") if canonical_url else "<span style='color:var(--muted);font-size:12px'>\u2014</span>"
+                _correct_url = html.escape(f"/app/profiles/{pr_id}/posts/{p_obj.id}/correct")
                 correct_btn = (
-                    f"<form method='post' action='/app/profiles/{pr_id}/posts/{html.escape(p_obj.id)}/correct' style='margin:0'>"
-                    f"<button class='btn flat' type='submit' style='font-size:11px;padding:4px 10px;color:#f59e0b;border-color:rgba(245,158,11,.35);background:transparent' "
-                    f"onclick=\"return confirm('Reprocessar o texto deste post e atualizar no WordPress?')\">Corrigir</button></form>"
+                    f"<button class='btn flat' type='button' "
+                    f"style='font-size:11px;padding:4px 10px;color:#f59e0b;border-color:rgba(245,158,11,.35);background:transparent' "
+                    f"onclick=\"if(confirm('Reprocessar o texto deste post e atualizar no WordPress?')){{var f=document.createElement('form');f.method='post';f.action='{_correct_url}';document.body.appendChild(f);f.submit();}}\">Corrigir</button>"
                 )
-                out += (f"<tr style='border-top:1px solid rgba(16,185,129,.12);border-left:3px solid #10b981;background:rgba(16,185,129,.03)'>"
+                out += (f"<tr style='border-top:1px solid rgba(16,185,129,.12);border-left:3px solid #10b981;background:rgba(16,185,129,.03)' data-pub-date='{html.escape(dt_iso)}'>"
                         f"<td style='padding:10px 14px;width:36px'>{chk}</td>"
                         f"<td style='padding:10px 14px'><div style='display:flex;align-items:center;gap:8px'>"
                         f"<span style='width:20px;height:20px;border-radius:50%;background:#10b981;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;color:#fff'>✓</span>"
@@ -5282,12 +6652,14 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                         f"<td style='padding:10px 14px'><span style='color:#10b981;font-size:11px;font-weight:700;background:rgba(16,185,129,.12);padding:3px 8px;border-radius:20px'>✓ Publicado</span></td>"
                         f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{dt}</td>"
                         f"<td style='padding:10px 14px'>{wp_link}</td>"
+                        f"<td style='padding:10px 14px'>{src_link}</td>"
                         f"<td style='padding:10px 14px'>{correct_btn}</td></tr>")
             return out
 
         def _build_pend_rows(items):
             out = ""
-            for p_obj, title in items:
+            for row in items:
+                p_obj, title = row[0], row[1]
                 t = html.escape(str(title or "")[:80] + ("\u2026" if len(str(title or "")) > 80 else ""))
                 dt = html.escape(_fmt_dt(p_obj.created_at, user=user))
                 chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer'/>"
@@ -5304,9 +6676,39 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                         f"<td style='padding:10px 14px;font-size:12px;color:var(--muted)'>{timer_html}</td></tr>")
             return out
 
+        def _build_collect_plan_rows(count: int, plan: dict) -> str:
+            if count <= 0:
+                return ""
+            next_run = plan.get("next_run")
+            if isinstance(next_run, datetime) and next_run > now_utc:
+                target_ms = int(next_run.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                tempo = f"em <b data-ph-countdown-target='{target_ms}'>...</b>"
+                when = html.escape(_fmt_dt(next_run, user=user))
+            elif plan.get("running"):
+                tempo = "coletando fontes agora"
+                when = "agora"
+            else:
+                tempo = "na fila de coleta"
+                when = "agora"
+            qty_label = f"{count} post{'s' if count != 1 else ''} em prepara&ccedil;&atilde;o"
+            return (
+                "<tr style='border-top:1px solid var(--border);background:rgba(245,158,11,.05)'>"
+                "<td style='padding:10px 14px;width:36px'>"
+                "<input type='checkbox' disabled style='width:14px;height:14px;opacity:.35'/></td>"
+                f"<td style='padding:10px 14px;font-size:13px;color:var(--text)'><b>{qty_label}</b>"
+                "<div style='font-size:11px;color:var(--muted);margin-top:3px'>"
+                "Os posts aparecem aqui como itens reais assim que a coleta identifica as receitas.</div></td>"
+                "<td style='padding:10px 14px'><span style='color:#f59e0b;font-size:11px;font-weight:700;"
+                "background:rgba(245,158,11,.12);padding:3px 8px;border-radius:20px'>"
+                "Preparando</span></td>"
+                f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{when}</td>"
+                f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{tempo}</td></tr>"
+            )
+
         def _build_fail_rows(items):
             out = ""
-            for p_obj, title in items:
+            for row in items:
+                p_obj, title = row[0], row[1]
                 t = html.escape(str(title or "")[:80] + ("\u2026" if len(str(title or "")) > 80 else ""))
                 dt = html.escape(_fmt_dt(p_obj.created_at, user=user))
                 chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer'/>"
@@ -5328,7 +6730,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             return out
 
         pub_rows  = _build_pub_rows(pub_posts)
-        pend_rows = _build_pend_rows(pend_posts)
+        pend_rows = _build_collect_plan_rows(c_pend_planned, collect_plan) + _build_pend_rows(pend_posts)
         fail_rows = _build_fail_rows(fail_posts)
 
         # bot header
@@ -5406,16 +6808,23 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             <span style="width:22px;height:22px;border-radius:6px;background:rgba(16,185,129,.15);display:inline-flex;align-items:center;justify-content:center;font-size:11px">✓</span>
             Publicados
             <span class="ts-badge" style="color:#10b981;border-color:rgba(16,185,129,.3)">{c_pub}</span>
+            <a href="/app/history?bot={pr_id}" onclick="event.stopPropagation()" style="font-size:11px;padding:3px 9px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;text-decoration:none;color:var(--muted);display:inline-flex;align-items:center;gap:4px;white-space:nowrap">&#128203; Hist&#243;rico</a>
           </span>
           <span class="ts-arrow">▶</span>
         </summary>
         <div class="ts-body" style="padding:14px 20px">
-          <form method="post" action="/app/profiles/{pr_id}/posts/bulk">
-            {_ptable(f"tbl-pub-{pr_id}", pub_rows, "Nenhum post publicado ainda.", "Link", "Corrigir")}
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-              <button class="btn secondary" type="submit" name="mode" value="delete" {pub_action_disabled} style="font-size:12px;padding:5px 12px;{pub_action_style}">Excluir selecionados (PostHub)</button>
-              <button class="btn flat" type="submit" name="mode" value="delete_wp" {pub_action_disabled} style="font-size:12px;padding:5px 12px;color:#ef4444;border-color:rgba(239,68,68,.45);background:transparent;{pub_action_style}"
-                onclick="return confirm('Apagar do WordPress? Esta a\u00e7\u00e3o n\u00e3o pode ser desfeita.')">&#128465; Apagar do WordPress</button>
+          <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+            <button type="button" id="sort-pub-{pr_id}" onclick="(function(){{var tid='tbl-pub-{pr_id}';var btn=document.getElementById('sort-pub-{pr_id}');var tb=document.getElementById(tid).querySelector('tbody');var rows=Array.from(tb.querySelectorAll('tr[data-pub-date]'));var asc=btn.dataset.sortAsc==='1';rows.sort(function(a,b){{var da=a.getAttribute('data-pub-date')||'';var db=b.getAttribute('data-pub-date')||'';return asc?(da<db?-1:da>db?1:0):(da>db?-1:da<db?1:0);}});rows.forEach(function(r){{tb.appendChild(r);}});btn.dataset.sortAsc=asc?'0':'1';btn.innerHTML=asc?'&#8593; Data (mais antigo)':'&#8595; Data (mais recente)';}})()" data-sort-asc="0"
+              style="font-size:11px;padding:4px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--muted);display:flex;align-items:center;gap:4px">&#8595; Data (mais recente)</button>
+          </div>
+          <form id="bulk-pub-form-{pr_id}" method="post" action="/app/profiles/{pr_id}/posts/bulk">
+            <input type="hidden" name="mode" value="delete">
+            {_ptable(f"tbl-pub-{pr_id}", pub_rows, "Nenhum post publicado ainda.", "Link", "Fonte", "Corrigir")}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+              <button class="btn secondary" type="button" {pub_action_disabled} style="font-size:12px;padding:5px 12px;{pub_action_style}"
+                onclick="(function(){{var n=document.querySelectorAll('#tbl-pub-{pr_id} input[name=post_id]:checked').length;if(!n){{alert('Selecione ao menos um post marcando a caixa na esquerda.');return;}}if(!confirm('Excluir '+n+' post(s) do PostHub? O artigo no WordPress \u00e9 mantido.'))return;document.getElementById('bulk-pub-form-{pr_id}').querySelector('input[name=mode]').value='delete';document.getElementById('bulk-pub-form-{pr_id}').submit();}})()">Excluir selecionados (PostHub)</button>
+              <button class="btn flat" type="button" {pub_action_disabled} style="font-size:12px;padding:5px 12px;color:#ef4444;border-color:rgba(239,68,68,.45);background:transparent;{pub_action_style}"
+                onclick="(function(){{var n=document.querySelectorAll('#tbl-pub-{pr_id} input[name=post_id]:checked').length;if(!n){{alert('Selecione ao menos um post marcando a caixa na esquerda.');return;}}if(!confirm('Apagar '+n+' post(s) do WordPress? Esta a\u00e7\u00e3o n\u00e3o pode ser desfeita.'))return;document.getElementById('bulk-pub-form-{pr_id}').querySelector('input[name=mode]').value='delete_wp';document.getElementById('bulk-pub-form-{pr_id}').submit();}})()">&#128465; Apagar do WordPress</button>
             </div>
           </form>
         </div>
@@ -5537,12 +6946,229 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
   _restore();
   document.addEventListener('toggle',function(e){if(e.target.tagName==='DETAILS')_save(e.target);},true);
 })();
+
+/* ── Column resize for all pub tables ── */
+(function(){
+  function initResize(table){
+    if(table.dataset.resizeInit) return;
+    table.dataset.resizeInit='1';
+    table.style.tableLayout='fixed';
+    var ths=table.querySelectorAll('thead th');
+    ths.forEach(function(th){
+      var handle=document.createElement('div');
+      handle.style.cssText='position:absolute;right:0;top:0;bottom:0;width:5px;cursor:col-resize;user-select:none;z-index:1';
+      th.style.position='relative';
+      th.style.overflow='hidden';
+      var startX,startW;
+      handle.addEventListener('mousedown',function(e){
+        startX=e.pageX; startW=th.offsetWidth;
+        document.addEventListener('mousemove',onMove);
+        document.addEventListener('mouseup',function(){document.removeEventListener('mousemove',onMove);},{once:true});
+        e.preventDefault();
+      });
+      function onMove(e){th.style.width=Math.max(40,startW+(e.pageX-startX))+'px';}
+      th.appendChild(handle);
+    });
+  }
+  function scanTables(){
+    document.querySelectorAll('table[id^="tbl-pub-"]').forEach(initResize);
+  }
+  document.addEventListener('DOMContentLoaded',scanTables);
+  setTimeout(scanTables,800);
+})();
 </script>"""
     if _active_job_count > 0 or _active_post_count > 0:
         refresh_js += "<script>setTimeout(function(){location.reload();},5000);</script>"
 
     body = flash_html + _ph("secao-posts") + summary_bar + help_menu + bot_sections + refresh_js
-    return _layout("Posts", body, user=user)
+    return _layout("Posts", body, user=user, active_nav="posts")
+
+
+@router.get("/app/profiles/{profile_id}/history", include_in_schema=False)
+def profile_history_redirect(profile_id: str, user: User = Depends(get_current_user)):
+    """Redirect old per-profile history URL to global history page."""
+    return RedirectResponse(f"/app/history?bot={profile_id}", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/app/history", include_in_schema=False)
+def history_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Histórico completo de publicações — todos os bots, separados por seção."""
+    all_profiles = list(db.scalars(
+        select(AutomationProfile)
+        .where(AutomationProfile.user_id == user.id)
+        .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
+    ))
+
+    th_s = "padding:9px 12px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);white-space:nowrap"
+
+    def _build_hist_rows(items, pr_id):
+        out = ""
+        for idx, row in enumerate(items):
+            p_obj = row[0]
+            title = row[1]
+            canonical_url = row[2] if len(row) > 2 else None
+            t = html.escape(str(title or "")[:90] + ("…" if len(str(title or "")) > 90 else ""))
+            dt = html.escape(_fmt_dt(p_obj.published_at or p_obj.created_at, user=user))
+            dt_iso = (p_obj.published_at or p_obj.created_at).isoformat() if (p_obj.published_at or p_obj.created_at) else ""
+            chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer' onchange=\"_phHistCount('{html.escape(pr_id)}')\"/>"
+            wp_link = (f"<a href='{html.escape(p_obj.wp_url)}' target='_blank' rel='noopener' "
+                       f"style='color:#10b981;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap'>&#8599; Ver</a>") if p_obj.wp_url else "<span style='color:var(--muted)'>—</span>"
+            src_link = (f"<a href='{html.escape(str(canonical_url))}' target='_blank' rel='noopener' "
+                        f"style='color:#6366f1;font-size:12px;text-decoration:none;white-space:nowrap' title='{html.escape(str(canonical_url))}'>&#8599; Fonte</a>") if canonical_url else "<span style='color:var(--muted)'>—</span>"
+            _correct_url = html.escape(f"/app/profiles/{pr_id}/posts/{p_obj.id}/correct")
+            correct_btn = (
+                f"<button type='button' class='btn flat' "
+                f"style='font-size:11px;padding:3px 8px;color:#f59e0b;border-color:rgba(245,158,11,.35);background:transparent' "
+                f"onclick=\"if(confirm('Reprocessar e atualizar no WordPress?')){{var f=document.createElement('form');f.method='post';f.action='{_correct_url}';document.body.appendChild(f);f.submit();}}\">Corrigir</button>"
+            )
+            out += (
+                f"<tr style='border-top:1px solid var(--border)' data-hist-date='{html.escape(dt_iso)}'>"
+                f"<td style='padding:8px 12px;width:32px'>{chk}</td>"
+                f"<td style='padding:8px 12px;font-size:13px;color:var(--text)'>{t}</td>"
+                f"<td style='padding:8px 12px;font-size:12px;color:var(--muted);white-space:nowrap'>{dt}</td>"
+                f"<td style='padding:8px 12px'>{wp_link}</td>"
+                f"<td style='padding:8px 12px'>{src_link}</td>"
+                f"<td style='padding:8px 12px'>{correct_btn}</td>"
+                f"</tr>"
+            )
+        return out
+
+    bot_sections = ""
+    grand_total = 0
+    for pr in all_profiles:
+        pr_id  = html.escape(pr.id)
+        pr_name  = html.escape(pr.name)
+        pr_emoji = _safe((pr.publish_config_json or {}).get("emoji") or "🤖")
+        icon_bg  = "linear-gradient(135deg,#10b981,#059669)" if pr.active else "linear-gradient(135deg,var(--primary),var(--pink))"
+
+        total_pub = int(db.scalar(select(func.count()).select_from(Post).where(
+            Post.profile_id == pr.id, Post.status == PostStatus.completed)) or 0)
+        grand_total += total_pub
+
+        rows = list(db.execute(
+            select(Post, CollectedContent.title, CollectedContent.canonical_url)
+            .join(CollectedContent, CollectedContent.id == Post.collected_content_id)
+            .where(Post.profile_id == pr.id, Post.status == PostStatus.completed)
+            .order_by(Post.published_at.desc().nullslast(), Post.created_at.desc())
+            .limit(300)
+        ).all())
+
+        tbl_rows = _build_hist_rows(rows, pr.id)
+        if not tbl_rows:
+            tbl_rows = f"<tr><td colspan='6' style='padding:24px;text-align:center;color:var(--muted);font-size:13px'>Nenhum post publicado ainda.</td></tr>"
+
+        has_posts = bool(rows)
+        btn_dis   = "" if has_posts else "disabled"
+        btn_sty   = "" if has_posts else "opacity:.45;cursor:not-allowed;"
+
+        bot_sections += f"""
+<details class="card toggle-section" data-persist-toggle="hist-bot-{pr_id}" data-default-open="{'1' if pr.active else '0'}" style="margin-bottom:14px;padding:0;overflow:hidden">
+  <summary style="padding:14px 18px;display:flex;align-items:center;justify-content:space-between">
+    <span class="ts-title" style="display:flex;align-items:center;gap:10px">
+      <div style="width:32px;height:32px;border-radius:8px;background:{icon_bg};display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">{pr_emoji}</div>
+      <span style="font-weight:700">{pr_name}</span>
+      <span class="ts-badge" style="color:#10b981;border-color:rgba(16,185,129,.3)">{total_pub} publicados</span>
+    </span>
+    <span class="ts-arrow">&#9654;</span>
+  </summary>
+  <div class="ts-body" style="padding:0;border-top:1px solid var(--border)">
+    <!-- Toolbar -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface2);align-items:center">
+      <button type="button" id="hist-sort-{pr_id}" data-sort-asc="0"
+        onclick="(function(){{var tid='hist-tbl-{pr_id}';var btn=document.getElementById('hist-sort-{pr_id}');var tb=document.getElementById(tid).querySelector('tbody');var rows=Array.from(tb.querySelectorAll('tr[data-hist-date]'));var asc=btn.dataset.sortAsc==='1';rows.sort(function(a,b){{var da=a.getAttribute('data-hist-date')||'';var db=b.getAttribute('data-hist-date')||'';return asc?(da<db?-1:da>db?1:0):(da>db?-1:da<db?1:0);}});rows.forEach(function(r){{tb.appendChild(r);}});btn.dataset.sortAsc=asc?'0':'1';btn.innerHTML=asc?'&#8593; Mais antigo':'&#8595; Mais recente';}})()"
+        style="font-size:11px;padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--muted)">&#8595; Mais recente</button>
+      <span id="hist-cnt-{pr_id}" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+    <!-- Table -->
+    <form id="hist-form-{pr_id}" method="post" action="/app/profiles/{pr_id}/posts/bulk">
+      <input type="hidden" name="mode" value="delete">
+      <div style="overflow-x:auto">
+        <table id="hist-tbl-{pr_id}" style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--surface2)">
+            <th style="{th_s};width:32px"><input type="checkbox" style="width:14px;height:14px;cursor:pointer"
+              onclick="var h=this;document.getElementById('hist-tbl-{pr_id}').querySelectorAll('input[name=post_id]').forEach(function(c){{c.checked=h.checked;}});_phHistCount('{pr_id}')"></th>
+            <th style="{th_s}">T&#237;tulo</th>
+            <th style="{th_s};width:130px">Publicado</th>
+            <th style="{th_s};width:60px">WP</th>
+            <th style="{th_s};width:60px">Fonte</th>
+            <th style="{th_s};width:80px">A&#231;&#227;o</th>
+          </tr></thead>
+          <tbody>{tbl_rows}</tbody>
+        </table>
+      </div>
+      <!-- Bulk actions -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--border);align-items:center">
+        <button type="button" {btn_dis} style="font-size:12px;padding:5px 12px;{btn_sty}" class="btn secondary"
+          onclick="(function(){{var n=document.querySelectorAll('#hist-tbl-{pr_id} input[name=post_id]:checked').length;if(!n){{alert('Selecione ao menos um post.');return;}}if(!confirm('Excluir '+n+' post(s) do PostHub?'))return;document.getElementById('hist-form-{pr_id}').querySelector('input[name=mode]').value='delete';document.getElementById('hist-form-{pr_id}').submit();}})()">Excluir selecionados</button>
+        <button type="button" {btn_dis} style="font-size:12px;padding:5px 12px;{btn_sty}" class="btn secondary"
+          onclick="(function(){{if(!confirm('Excluir TODOS os {total_pub} posts publicados deste bot do PostHub?'))return;document.querySelectorAll('#hist-tbl-{pr_id} input[name=post_id]').forEach(function(c){{c.checked=true;}});document.getElementById('hist-form-{pr_id}').querySelector('input[name=mode]').value='delete';document.getElementById('hist-form-{pr_id}').submit();}})()">Excluir todos ({total_pub})</button>
+        <button type="button" {btn_dis} style="font-size:12px;padding:5px 12px;color:#ef4444;border-color:rgba(239,68,68,.45);background:transparent;{btn_sty}" class="btn flat"
+          onclick="(function(){{var n=document.querySelectorAll('#hist-tbl-{pr_id} input[name=post_id]:checked').length;if(!n){{alert('Selecione ao menos um post.');return;}}if(!confirm('Apagar '+n+' post(s) do WordPress? Ação irreversível.'))return;document.getElementById('hist-form-{pr_id}').querySelector('input[name=mode]').value='delete_wp';document.getElementById('hist-form-{pr_id}').submit();}})()">&#128465; Apagar do WordPress</button>
+      </div>
+    </form>
+  </div>
+</details>"""
+
+    if not all_profiles:
+        bot_sections = """<div class="card" style="text-align:center;padding:48px 20px">
+          <div style="font-size:48px;margin-bottom:12px">📭</div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:8px">Nenhum bot criado</div>
+          <a href="/app/robot" class="btn">🤖 Ir para Robô</a>
+        </div>"""
+
+    hist_script = """<script>
+function _phHistCount(pid) {
+  var n = document.querySelectorAll('#hist-tbl-' + pid + ' input[name=post_id]:checked').length;
+  var el = document.getElementById('hist-cnt-' + pid);
+  if (el) el.textContent = n > 0 ? n + ' selecionado(s)' : '';
+}
+/* Toggle persistence */
+(function(){
+  var P='ph-tgl:';
+  document.querySelectorAll('details[data-persist-toggle]').forEach(function(el){
+    var saved=localStorage.getItem(P+el.getAttribute('data-persist-toggle'));
+    el.open = saved!==null ? saved==='1' : el.getAttribute('data-default-open')==='1';
+  });
+  document.addEventListener('toggle',function(e){
+    if(e.target.tagName==='DETAILS' && e.target.hasAttribute('data-persist-toggle'))
+      localStorage.setItem(P+e.target.getAttribute('data-persist-toggle'),e.target.open?'1':'0');
+  },true);
+})();
+/* Column resize */
+(function(){
+  function initResize(table){
+    if(table.dataset.resizeInit) return;
+    table.dataset.resizeInit='1';
+    table.style.tableLayout='fixed';
+    table.querySelectorAll('thead th').forEach(function(th){
+      var handle=document.createElement('div');
+      handle.style.cssText='position:absolute;right:0;top:0;bottom:0;width:5px;cursor:col-resize;user-select:none;z-index:1';
+      th.style.position='relative'; th.style.overflow='hidden';
+      var startX,startW;
+      handle.addEventListener('mousedown',function(e){
+        startX=e.pageX; startW=th.offsetWidth;
+        document.addEventListener('mousemove',onMove);
+        document.addEventListener('mouseup',function(){document.removeEventListener('mousemove',onMove);},{once:true});
+        e.preventDefault();
+      });
+      function onMove(e){th.style.width=Math.max(40,startW+(e.pageX-startX))+'px';}
+      th.appendChild(handle);
+    });
+  }
+  setTimeout(function(){document.querySelectorAll('table[id^="hist-tbl-"]').forEach(initResize);},400);
+})();
+</script>"""
+
+    flash_msg = (request.query_params.get("msg") or "").strip()
+    flash_html = f"<div class='card' style='border-color:rgba(99,102,241,.4);margin-bottom:14px'><b>{html.escape(flash_msg)}</b></div>" if flash_msg else ""
+
+    summary = f"<div style='font-size:13px;color:var(--muted);margin-bottom:16px'>{grand_total} publicações no total em {len(all_profiles)} bot(s)</div>"
+    body = flash_html + summary + bot_sections + hist_script
+    return _layout("Histórico", body, user=user, active_nav="history")
 
 
 @router.get("/app/logs", include_in_schema=False)
@@ -5942,6 +7568,23 @@ def _get_post_error(db, post_id: str, user_id: str) -> str:
     return str(meta.get("error") or log.message or "")
 
 
+def _notification_hidden(post: Post) -> bool:
+    return isinstance(post.outputs_json, dict) and bool(post.outputs_json.get("notification_hidden"))
+
+
+def _notification_completed(post: Post) -> bool:
+    return isinstance(post.outputs_json, dict) and bool(post.outputs_json.get("notification_completed"))
+
+
+def _set_notification_state(post: Post, *, hidden: bool | None = None, completed: bool | None = None) -> None:
+    outputs = dict(post.outputs_json or {})
+    if hidden is not None:
+        outputs["notification_hidden"] = bool(hidden)
+    if completed is not None:
+        outputs["notification_completed"] = bool(completed)
+    post.outputs_json = outputs
+
+
 @router.get("/app/notifications/feed", include_in_schema=False)
 def notifications_feed(user: User = Depends(get_current_user), db=Depends(get_db)):
     """JSON feed of recent completed/failed posts for the notification bell."""
@@ -5961,6 +7604,8 @@ def notifications_feed(user: User = Depends(get_current_user), db=Depends(get_db
     tz = _user_zoneinfo(user)
     feed = []
     for post, title, bot_name in rows:
+        if _notification_hidden(post) or _notification_completed(post):
+            continue
         is_canceled = isinstance(post.outputs_json, dict) and bool(post.outputs_json.get("canceled_by_user"))
         ntype = "success" if post.status == PostStatus.completed else "error"
         label = "Cancelado" if (post.status == PostStatus.failed and is_canceled) else (
@@ -5986,6 +7631,7 @@ def notifications_feed(user: User = Depends(get_current_user), db=Depends(get_db
             "bot": str(bot_name or ""),
             "status": label,
             "when": when_str,
+            "ts_ms": int(ts.replace(tzinfo=timezone.utc).timestamp() * 1000) if ts else 0,
             "wp_url": post.wp_url or "",
             "error_label": error_label,
             "fix": fix,
@@ -5994,8 +7640,28 @@ def notifications_feed(user: User = Depends(get_current_user), db=Depends(get_db
     return _JSONResponse(feed)
 
 
+@router.post("/app/notifications/{post_id}/delete", include_in_schema=False)
+def notification_delete(post_id: str, user: User = Depends(get_current_user), db=Depends(get_db)):
+    post = db.scalar(select(Post).where(Post.id == post_id, Post.user_id == user.id))
+    if post:
+        _set_notification_state(post, hidden=True)
+        db.add(post)
+        db.commit()
+    return RedirectResponse("/app/notifications?msg=Notificacao+excluida.", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/app/notifications/{post_id}/complete", include_in_schema=False)
+def notification_complete(post_id: str, user: User = Depends(get_current_user), db=Depends(get_db)):
+    post = db.scalar(select(Post).where(Post.id == post_id, Post.user_id == user.id))
+    if post:
+        _set_notification_state(post, completed=True, hidden=False)
+        db.add(post)
+        db.commit()
+    return RedirectResponse("/app/notifications?msg=Notificacao+marcada+como+concluida.", status_code=status.HTTP_302_FOUND)
+
+
 @router.get("/app/notifications", include_in_schema=False)
-def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db)):
+def notifications_page(request: Request, user: User = Depends(get_current_user), db=Depends(get_db)):
     """Full notifications page with recent events, error details and toggle settings."""
     rows = list(
         db.execute(
@@ -6013,9 +7679,12 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
     tz = _user_zoneinfo(user)
     items_html = ""
     for post, title, bot_name in rows:
+        if _notification_hidden(post):
+            continue
+        is_resolved = _notification_completed(post)
         is_canceled = isinstance(post.outputs_json, dict) and bool(post.outputs_json.get("canceled_by_user"))
-        is_ok = post.status == PostStatus.completed
-        label = "Cancelado" if (not is_ok and is_canceled) else ("Publicado" if is_ok else "Falhou")
+        is_ok = post.status == PostStatus.completed or is_resolved
+        label = "Concluida" if is_resolved else ("Cancelado" if (not is_ok and is_canceled) else ("Publicado" if is_ok else "Falhou"))
         ts = post.updated_at or post.created_at
         try:
             when_str = ts.replace(tzinfo=timezone.utc).astimezone(tz).strftime("%d/%m/%Y às %H:%M")
@@ -6033,7 +7702,7 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
             link_html  = (
                 f"<a href='{html.escape(wp_url)}' target='_blank' rel='noopener' "
                 f"style='color:#10b981;font-size:12px;font-weight:600;text-decoration:none'>🔗 Ver post</a>"
-            ) if wp_url else ""
+            ) if (wp_url and not is_resolved) else ""
             error_block = ""
         else:
             icon_html  = "<span style='width:32px;height:32px;border-radius:50%;background:rgba(239,68,68,.12);color:#ef4444;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px;font-weight:700'>✕</span>"
@@ -6046,15 +7715,16 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
                 raw_err = "canceled_by_user"
             error_label, fix, fix_url = _translate_error(raw_err)
 
-            fix_btn = ""
-            if fix_url:
-                fix_btn = (
-                    f"<a href='{html.escape(fix_url)}' "
-                    f"style='display:inline-flex;align-items:center;gap:5px;margin-top:8px;"
-                    f"font-size:12px;font-weight:600;color:#fff;background:#ef4444;"
-                    f"border-radius:8px;padding:6px 14px;text-decoration:none;width:fit-content'>"
-                    f"→ Corrigir agora</a>"
-                )
+            fix_btn = (
+                "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:10px'>"
+                f"<form method='post' action='/app/notifications/{html.escape(post.id)}/complete' style='margin:0'>"
+                "<button class='btn secondary' type='submit' style='font-size:12px;padding:6px 12px'>Marcar como concluida</button>"
+                "</form>"
+                f"<form method='post' action='/app/notifications/{html.escape(post.id)}/delete' style='margin:0'>"
+                "<button class='btn flat' type='submit' style='font-size:12px;padding:6px 12px;color:#ef4444;border-color:rgba(239,68,68,.35);background:transparent'>Excluir notificacao</button>"
+                "</form>"
+                "</div>"
+            )
 
             error_block = f"""
             <div style='margin-top:10px;padding:12px 14px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.18);border-radius:10px'>
@@ -6085,15 +7755,18 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
 
     if not items_html:
         items_html = "<div style='padding:40px;text-align:center;color:var(--muted);font-size:14px'>Nenhuma notificação ainda. Quando posts forem publicados ou falharem, aparecerão aqui.</div>"
+    flash_msg = (request.query_params.get("msg") or "").strip()
+    flash_html = f"<div class='card' style='border-color:rgba(16,185,129,.35);margin-bottom:12px'><b>{html.escape(flash_msg)}</b></div>" if flash_msg else ""
 
     body = f"""
     {_ph("pagina-notificacoes")}
+    {flash_html}
     <div style='display:flex;flex-direction:column;gap:20px'>
       <div class="card" style='padding:0;overflow:hidden'>
         <div style='padding:18px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px'>
           <div>
             <h3 style='margin:0 0 2px'>Notificações</h3>
-            <p class='muted' style='margin:0;font-size:13px'>Posts publicados e erros — com causa e como corrigir</p>
+            <p class='muted' style='margin:0;font-size:13px'>Posts publicados, falhas e alertas resolvidos</p>
           </div>
           <button onclick="document.getElementById('notif-list').innerHTML='<div style=\\'padding:40px;text-align:center;color:var(--muted)\\'>Marcadas como lidas</div>';var b=document.getElementById('notif-badge');if(b)b.classList.remove('visible');" class='btn secondary' style='font-size:12px;padding:7px 14px'>Marcar todas como lidas</button>
         </div>
@@ -6126,6 +7799,19 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
               <span class='ns-track'></span>
             </label>
           </div>
+          <div style='display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border:1px solid var(--border);border-radius:12px;gap:12px;flex-wrap:wrap'>
+            <div style='min-width:220px;flex:1'>
+              <div style='font-size:13px;font-weight:600'>Notificacoes desktop</div>
+              <div style='font-size:12px;color:var(--muted);margin-top:2px'>Mostra avisos do navegador mesmo fora da aba do PostHUB</div>
+            </div>
+            <div style='display:flex;align-items:center;gap:10px'>
+              <button type='button' class='btn secondary' onclick='window._phRequestDesktopNotifications && window._phRequestDesktopNotifications()' style='font-size:12px;padding:7px 12px'>Ativar no navegador</button>
+              <label style='position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0'>
+                <input type='checkbox' id='ns-desktop' style='opacity:0;width:0;height:0' onchange='_saveNotifSettings()'>
+                <span class='ns-track'></span>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -6147,18 +7833,25 @@ def notifications_page(user: User = Depends(get_current_user), db=Depends(get_db
       (function(){{
         var LS = 'ph-notif-settings';
         function load() {{
-          try {{ return JSON.parse(localStorage.getItem(LS) || '{{"success":true,"error":true}}'); }}
-          catch(e) {{ return {{"success":true,"error":true}}; }}
+          try {{
+            var s = JSON.parse(localStorage.getItem(LS) || '{{"success":true,"error":true,"desktop":false}}');
+            if (typeof s.desktop === 'undefined') s.desktop = false;
+            return s;
+          }}
+          catch(e) {{ return {{"success":true,"error":true,"desktop":false}}; }}
         }}
         var s = load();
         var cb_s = document.getElementById('ns-success');
         var cb_e = document.getElementById('ns-error');
+        var cb_d = document.getElementById('ns-desktop');
         if (cb_s) cb_s.checked = s.success !== false;
         if (cb_e) cb_e.checked = s.error !== false;
+        if (cb_d) cb_d.checked = s.desktop === true && ('Notification' in window) && Notification.permission === 'granted';
         window._saveNotifSettings = function() {{
           localStorage.setItem(LS, JSON.stringify({{
             success: cb_s ? cb_s.checked : true,
             error:   cb_e ? cb_e.checked : true,
+            desktop: cb_d ? cb_d.checked : false,
           }}));
         }};
       }})();

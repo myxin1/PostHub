@@ -3,3 +3,11 @@ backend/.pyuserbase/
 **/__pycache__/
 *.pyc
 deploy.sh
+*.db
+*.log
+backend/.env
+backend/.posthub_key
+backend/alembic/
+backend/alembic.ini
+backend/smoke_test.py
+backend/server.py
