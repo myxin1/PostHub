@@ -2242,7 +2242,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
                 <span class="active-project-stat">Posts: <b>{_b_pp}</b> pend. / <b>{_b_proc}</b> proc.</span>
               </div>
               <div class="robot-actions">
-                {f'<div class="robot-action-card"><div class="robot-action-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">&#9889;</div><div><div class="robot-action-title">Rodar pendentes agora</div><div class="robot-action-desc muted">{_b_qs} jobs agendados aguardando</div></div><form method="post" action="/app/robot/run-now" style="margin-left:auto"><button class="btn secondary" type="submit" style="white-space:nowrap">Rodar agora</button></form></div>' if _b_qs > 0 and _b_rj == 0 else ''}
+                {f'<div class="robot-action-card"><div class="robot-action-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">&#9889;</div><div><div class="robot-action-title">Rodar pendentes agora</div><div class="robot-action-desc muted">{_b_qs} jobs agendados aguardando</div></div><div style="margin-left:auto"><button class="btn secondary ph-run-now-btn" data-bot-id="" style="white-space:nowrap">Rodar agora</button></div></div>' if _b_qs > 0 and _b_rj == 0 else ''}
                 <div class="robot-action-card">
                   <div class="robot-action-icon" style="background:rgba(99,102,241,.15);color:#6366f1">&#8635;</div>
                   <div>
@@ -3024,6 +3024,45 @@ def robot_run_now(bot_id: str = Form(default=None), user: User = Depends(get_cur
     if not did:
         return RedirectResponse("/app/posts?msg=Nada+pendente+para+rodar.", status_code=status.HTTP_302_FOUND)
     return RedirectResponse("/app/posts?msg=Fila+liberada+e+retomada.", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/app/robot/tick-now", include_in_schema=False)
+async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+    """Prepara a fila e processa jobs imediatamente (até 55s). Chamado via AJAX."""
+    import asyncio as _asyncio
+    import time as _time
+    from app.worker import run_worker_tick as _run_tick
+
+    # Mesma lógica do run-now: prepara a fila primeiro
+    if bot_id:
+        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
+    else:
+        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.user_id == user.id).limit(1))
+    if bot:
+        now = datetime.utcnow()
+        db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
+        stuck_cutoff = now - timedelta(minutes=5)
+        db.execute(
+            update(Job).where(
+                Job.profile_id == bot.id, Job.status == JobStatus.running, Job.locked_at < stuck_cutoff
+            ).values(status=JobStatus.queued, run_at=now, locked_at=None, locked_by=None)
+        )
+        db.commit()
+
+    # Processa jobs em loop por até 55s
+    worker_id = f"manual:{user.id}"
+    ticks = 0
+    deadline = _time.monotonic() + 55
+    while _time.monotonic() < deadline:
+        try:
+            did_work = await _asyncio.to_thread(_run_tick, worker_id=worker_id)
+        except Exception:
+            break
+        if not did_work:
+            break
+        ticks += 1
+
+    return _JSONResponse({"ok": True, "ticks": ticks})
 
 
 @router.post("/app/robot/retry-ai", include_in_schema=False)
@@ -6978,10 +7017,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
       </summary>
       <div style="border-top:1px solid var(--border)">
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--surface2)">
-            <form method="post" action="/app/robot/run-now" style="margin:0">
-              <input type="hidden" name="bot_id" value="{pr_id}">
-              <button class="btn secondary" type="submit" {run_disabled} title="Libera jobs pendentes/agendados deste bot" style="font-size:11px;padding:5px 10px;{run_style}">&#9654; Rodar agora</button>
-            </form>
+            <button class="btn secondary ph-run-now-btn" {run_disabled} data-bot-id="{pr_id}" title="Libera e processa jobs pendentes deste bot agora" style="font-size:11px;padding:5px 10px;{run_style}">&#9654; Rodar agora</button>
             <form method="post" action="/app/robot/retry-ai" style="margin:0">
               <input type="hidden" name="bot_id" value="{pr_id}">
               <button class="btn secondary" type="submit" {retry_disabled} title="Reprocessa posts com falha" style="font-size:11px;padding:5px 10px;{retry_style}">&#8634; Reprocessar IA ({c_fail})</button>
@@ -7138,6 +7174,32 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
   _restore();
   document.addEventListener('toggle',function(e){if(e.target.tagName==='DETAILS')_save(e.target);},true);
 })();
+
+/* ── Rodar agora (AJAX) ── */
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.ph-run-now-btn');
+  if (!btn || btn.disabled) return;
+  e.preventDefault();
+  var botId = btn.getAttribute('data-bot-id') || '';
+  btn.disabled = true;
+  var orig = btn.innerHTML;
+  btn.innerHTML = '&#8987; Processando...';
+  btn.style.opacity = '0.7';
+  var fd = new FormData();
+  if (botId) fd.append('bot_id', botId);
+  fetch('/app/robot/tick-now', {method:'POST', body:fd, credentials:'same-origin'})
+    .then(function(r){ return r.ok ? r.json() : {ticks:0}; })
+    .then(function(d){
+      btn.innerHTML = d.ticks > 0 ? ('&#10003; ' + d.ticks + ' job(s) processado(s)') : '&#10003; Sem jobs na fila';
+      btn.style.opacity = '1';
+      setTimeout(function(){ location.reload(); }, 1200);
+    })
+    .catch(function(){
+      btn.disabled = false;
+      btn.innerHTML = orig;
+      btn.style.opacity = '1';
+    });
+});
 
 /* ── Column resize for all pub tables ── */
 (function(){
