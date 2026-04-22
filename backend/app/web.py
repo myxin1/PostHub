@@ -2594,7 +2594,7 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
             except Exception as _wpe:
                 import traceback as _tbtmp
                 db.rollback()
-                wp_test = {"ok": False, "retryable": False, "detail": f"Erro interno: {_tbtmp.format_exc()[-300:]}"}
+                wp_test = {"ok": False, "retryable": False, "detail": f"Erro interno: {_tbtmp.format_exc()[-1200:]}"}
             if wp_test.get("ok"):
                 display_name = wp_test.get("display_name") or active_user["username"]
                 roles = wp_test.get("roles") or []

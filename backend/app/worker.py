@@ -4,6 +4,7 @@ import hashlib
 import html
 import json
 import os
+import random
 import re
 import socket
 import time
@@ -11,7 +12,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.crypto import CryptoError, decrypt_json
@@ -32,13 +33,13 @@ from app.models import (
 )
 from app.queue import JOB_AI, JOB_CLEAN, JOB_COLLECT, JOB_FACEBOOK_PUBLISH, JOB_MEDIA, JOB_PUBLISH_WP, enqueue_job, get_due_job, log_event, schedule_retry
 from app.services.clean import clean_text
-from app.services.facebook import FacebookError, comment_on_post, publish_page_post
+from app.services.facebook import FacebookError, comment_on_post, publish_page_photo, publish_page_post
 from app.services.gemini import GeminiError, generate_text as gemini_generate_text
 from app.services.openai_service import OpenAIError, generate_text as openai_generate_text
 from app.services.images import download_and_prepare_image
 from app.services.rss import fetch_rss_items, keyword_to_google_news_rss
 from app.services.scrape import discover_recipe_links, is_probably_homepage, looks_like_recipe_page, scrape_url
-from app.services.wordpress import WordPressError, create_post, get_or_create_tag_id, list_categories, update_post, upload_media
+from app.services.wordpress import WordPressError, create_post, delete_post, get_or_create_tag_id, list_categories, upload_media
 
 
 def _fingerprint(*, user_id: str, canonical_url: str) -> str:
@@ -80,6 +81,14 @@ def _ensure_post_processing(db, post: Post):
         db.add(post)
 
 
+def _is_post_canceled(db, post: Post) -> bool:
+    try:
+        db.refresh(post)
+    except Exception:
+        pass
+    return isinstance(post.outputs_json, dict) and bool(post.outputs_json.get("canceled_by_user"))
+
+
 def _handle_collect(db, job: Job):
     profile_id = job.profile_id
     if not profile_id:
@@ -94,10 +103,8 @@ def _handle_collect(db, job: Job):
     default_interval = int(sched.get("interval_minutes") or 0)
     respect = int(job.payload_json.get("respect_schedule") or sched.get("respect_schedule") or 0) == 1
     limit = int(job.payload_json.get("limit") or default_limit)
-    if respect:
-        interval_minutes = int(job.payload_json.get("interval_minutes") or default_interval)
-    else:
-        interval_minutes = 0
+    # interval_minutes always applied when set; respect_schedule only gates start_at_utc
+    interval_minutes = int(job.payload_json.get("interval_minutes") or default_interval)
     created = 0
     skipped_duplicate = 0
     skipped_non_recipe = 0
@@ -155,7 +162,8 @@ def _handle_collect(db, job: Job):
         if limit and created >= limit:
             break
         if source.type == SourceType.RSS:
-            items = fetch_rss_items(source.value, limit=20)
+            items = fetch_rss_items(source.value, limit=50)
+            random.shuffle(items)
             for item in items:
                 if limit and created >= limit:
                     break
@@ -170,7 +178,8 @@ def _handle_collect(db, job: Job):
                 _enqueue_scraped(s=s, source_id=source.id, title_fallback=item.title)
         elif source.type == SourceType.KEYWORD:
             feed_url = keyword_to_google_news_rss(source.value)
-            items = fetch_rss_items(feed_url, limit=20)
+            items = fetch_rss_items(feed_url, limit=50)
+            random.shuffle(items)
             for item in items:
                 if limit and created >= limit:
                     break
@@ -199,10 +208,7 @@ def _handle_collect(db, job: Job):
 
             picked_links = discover_recipe_links(raw_html=scraped.raw_html, base_url=scraped.canonical_url, max_links=220)
             if picked_links:
-                day = datetime.utcnow().strftime("%Y-%m-%d")
-                h = hashlib.sha256((source.value + "|" + day).encode("utf-8")).hexdigest()
-                start = int(h[:8], 16) % len(picked_links)
-                picked_links = picked_links[start:] + picked_links[:start]
+                random.shuffle(picked_links)
             max_attempts = 220 if not limit else max(120, limit * 12)
             attempts = 0
             for u in picked_links:
@@ -263,10 +269,47 @@ def _handle_clean(db, job: Job):
         raise ValueError("content_or_post_not_found")
     _ensure_post_processing(db, post)
     content.extracted_text = clean_text(content.extracted_text)
+    if _is_post_canceled(db, post):
+        return
     db.add(content)
     db.flush()
     enqueue_job(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, job_type=JOB_AI, payload={"collected_content_id": content_id})
     log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_CLEAN, status="ok", message="clean_completed")
+
+
+def _resolve_prompt(prompt_text: str) -> str:
+    """Resolve prompt text — supports multi-variant JSON or plain string."""
+    text = (prompt_text or "").strip()
+    if not text or not text.startswith("{"):
+        return text
+    try:
+        data = json.loads(text)
+        variants: list = data.get("v") or []
+        mode = str(data.get("mode") or "1")
+        valid = [str(v).strip() for v in variants if str(v).strip()]
+        if not valid:
+            return ""
+        if mode == "random":
+            return random.choice(valid)
+        idx = int(mode) - 1
+        return valid[idx] if 0 <= idx < len(valid) else valid[0]
+    except Exception:
+        return text
+
+
+def _get_output_image_url(outputs: dict | None, *, fallback_url: str | None = None) -> str:
+    """Return the best image URL stored in outputs, tolerating old and new shapes."""
+    data = outputs if isinstance(outputs, dict) else {}
+    image_val = data.get("image")
+    if isinstance(image_val, dict):
+        url = str(image_val.get("url") or "").strip()
+        if url:
+            return url
+    elif isinstance(image_val, str):
+        url = image_val.strip()
+        if url:
+            return url
+    return str(fallback_url or "").strip()
 
 
 def _handle_ai(db, job: Job):
@@ -351,8 +394,8 @@ def _handle_ai(db, job: Job):
                 .order_by(AiAction.created_at.asc())
                 .limit(1)
             )
-        site_instr = str(site_prompt or "").strip()
-        fb_instr = str(fb_prompt or "").strip()
+        site_instr = _resolve_prompt(str(site_prompt or ""))
+        fb_instr = _resolve_prompt(str(fb_prompt or ""))
         if not site_instr:
             site_instr = (
                 "Você é um redator culinário. Reescreva a receita abaixo em PT-BR, sem copiar o texto original. "
@@ -375,6 +418,13 @@ def _handle_ai(db, job: Job):
             "}\n\n"
             "Instruções do campo site:\n"
             f"{site_instr}\n\n"
+            "FORMATO OBRIGATÓRIO do campo site (Markdown):\n"
+            "- Primeira linha obrigatória: # Título da Receita (usando # markdown)\n"
+            "- Em seguida, parágrafo de introdução (sem prefixo 'Introdução:')\n"
+            "- Use ## para seções: ## Ingredientes, ## Modo de Preparo, ## Dicas\n"
+            "- Use - para cada ingrediente na lista\n"
+            "- Use 1. 2. 3. para os passos numerados do modo de preparo\n"
+            "- Não use emojis no campo site\n\n"
             "Instruções do campo facebook:\n"
             f"{fb_instr}\n\n"
             "Categorias permitidas (escolha exatamente uma):\n"
@@ -388,11 +438,32 @@ def _handle_ai(db, job: Job):
         seed_title = _sanitize_source_title(content.title or "")
 
         def _run_ai(p: str, c: str) -> str:
+            # Primary: Gemini. Fallback: OpenAI. Vice-versa if only OpenAI is configured.
+            if gemini_key:
+                try:
+                    return gemini_generate_text(prompt=p, content=c, api_key=gemini_key).text
+                except Exception as _gem_err:
+                    if openai_key:
+                        log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id,
+                                  stage=JOB_AI, status="warning", message="gemini_failed_fallback_to_openai",
+                                  meta={"reason": str(_gem_err)[:160]})
+                        return openai_generate_text(prompt=p, content=c, model=openai_model, api_key=openai_key).text
+                    raise
             if openai_key:
-                return openai_generate_text(prompt=p, content=c, model=openai_model, api_key=openai_key).text
-            return gemini_generate_text(prompt=p, content=c, api_key=gemini_key).text
+                try:
+                    return openai_generate_text(prompt=p, content=c, model=openai_model, api_key=openai_key).text
+                except Exception as _oai_err:
+                    if gemini_key:
+                        log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id,
+                                  stage=JOB_AI, status="warning", message="openai_failed_fallback_to_gemini",
+                                  meta={"reason": str(_oai_err)[:160]})
+                        return gemini_generate_text(prompt=p, content=c, api_key=gemini_key).text
+                    raise
+            raise GeminiError("no_ai_key_configured")
 
         res_text = _run_ai(prompt, f"TÍTULO: {seed_title}\n\n{base_text}")
+        if _is_post_canceled(db, post):
+            return
         parsed = _parse_ai_json(res_text)
         site_text = str(parsed.get("site") or "").strip()
         fb_text = str(parsed.get("facebook") or "").strip()
@@ -410,12 +481,19 @@ def _handle_ai(db, job: Job):
                 "Categorias permitidas (escolha exatamente uma):\n"
                 f"{categories_text}\n\n"
                 f"Se não tiver certeza, use esta categoria padrão: {default_category}\n\n"
+                "FORMATO OBRIGATÓRIO do campo site (Markdown):\n"
+                "- Primeira linha: # Título da Receita (usando # markdown)\n"
+                "- Em seguida, introdução sem prefixo\n"
+                "- Use ## para seções: ## Ingredientes, ## Modo de Preparo, ## Dicas\n"
+                "- Use - para ingredientes e 1. 2. 3. para os passos\n"
+                "- Não use emojis no campo site\n\n"
                 "Regras:\n"
                 "- Não copie frases do texto original\n"
                 "- Não invente ingredientes\n"
-                "- No site: incluir Título, Introdução, Ingredientes, Modo de preparo, Dicas\n"
             )
             res2_text = _run_ai(fallback_prompt, f"TÍTULO: {seed_title}\n\n{base_text}")
+            if _is_post_canceled(db, post):
+                return
             parsed2 = _parse_ai_json(res2_text)
             site_text = str(parsed2.get("site") or "").strip()
             fb_text = str(parsed2.get("facebook") or "").strip()
@@ -470,6 +548,8 @@ def _handle_media(db, job: Job):
         post.updated_at = datetime.utcnow()
         db.add(post)
         db.flush()
+    if _is_post_canceled(db, post):
+        return
     if job.profile_id:
         has_wp_action = (
             db.scalar(
@@ -630,7 +710,7 @@ def _handle_publish_wp(db, job: Job):
                           meta={"reason": str(_tag_err)[:120]})
                 tag_ids = None
     featured_media_id = None
-    image_url = (outputs.get("image") or {}).get("url")
+    image_url = _get_output_image_url(outputs, fallback_url=content.lead_image_url)
     if image_url:
         prepared = download_and_prepare_image(str(image_url))
         featured_media_id = upload_media(
@@ -650,9 +730,8 @@ def _handle_publish_wp(db, job: Job):
             title = t
     title = title.strip() or "Post"
     wp_text = _strip_duplicate_title(title=title, text=wp_text)
-    wp_text = _to_plain_text(wp_text)
-    if "<strong>" not in wp_text and title:
-        wp_text = _bold_first_occurrence(text=wp_text, phrase=title)
+    if _is_post_canceled(db, post):
+        return
     if job.profile_id and _is_duplicate_candidate(
         db, profile_id=job.profile_id, current_post_id=post.id, title=title, canonical_url=content.canonical_url
     ):
@@ -684,32 +763,35 @@ def _handle_publish_wp(db, job: Job):
         return
     content_html = _render_wp_html(wp_text)
     if correction_requested and post.wp_post_id:
-        wp_post = update_post(
-            base_url=creds["base_url"],
-            username=creds["username"],
-            app_password=creds["app_password"],
-            post_id=int(post.wp_post_id),
-            title=title,
-            content_html=content_html,
-            status="publish",
-            featured_media_id=featured_media_id,
-            tags=tag_ids,
-            categories=category_ids,
-        )
-        log_message = "wordpress_updated"
-    else:
-        wp_post = create_post(
-            base_url=creds["base_url"],
-            username=creds["username"],
-            app_password=creds["app_password"],
-            title=title,
-            content_html=content_html,
-            status="publish",
-            featured_media_id=featured_media_id,
-            tags=tag_ids,
-            categories=category_ids,
-        )
-        log_message = "wordpress_published"
+        # Delete the old WP post first, then create a clean new one
+        try:
+            delete_post(
+                base_url=creds["base_url"],
+                username=creds["username"],
+                app_password=creds["app_password"],
+                post_id=int(post.wp_post_id),
+                force=True,
+            )
+        except WordPressError as _del_err:
+            # If the post is already gone on WP, that's fine — continue to create
+            log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id,
+                      stage=JOB_PUBLISH_WP, status="warning", message="wordpress_delete_skipped",
+                      meta={"reason": str(_del_err)[:160]})
+        post.wp_post_id = None
+        post.wp_url = None
+        db.add(post)
+    wp_post = create_post(
+        base_url=creds["base_url"],
+        username=creds["username"],
+        app_password=creds["app_password"],
+        title=title,
+        content_html=content_html,
+        status="publish",
+        featured_media_id=featured_media_id,
+        tags=tag_ids,
+        categories=category_ids,
+    )
+    log_message = "wordpress_corrected" if correction_requested else "wordpress_published"
     post.wp_post_id = wp_post.post_id
     post.wp_url = wp_post.link
     post.status = PostStatus.completed
@@ -726,6 +808,7 @@ def _handle_publish_wp(db, job: Job):
         publish_cfg = dict((profile.publish_config_json if profile else {}) or {})
         if bool(publish_cfg.get("facebook_enabled")):
             fb_link_place = str(publish_cfg.get("facebook_link") or "comments")
+            fb_img_mode = str(publish_cfg.get("facebook_image") or "link_preview")
             selected = publish_cfg.get("facebook_page_ids") or []
             selected_ids = {str(x) for x in selected} if isinstance(selected, list) else set()
             integ = db.scalar(select(Integration).where(Integration.profile_id == job.profile_id, Integration.type == IntegrationType.FACEBOOK))
@@ -750,7 +833,7 @@ def _handle_publish_wp(db, job: Job):
                     profile_id=job.profile_id,
                     post_id=job.post_id,
                     job_type=JOB_FACEBOOK_PUBLISH,
-                    payload={"page_id": page_id, "link_placement": ("body" if fb_link_place == "body" else "comments")},
+                    payload={"page_id": page_id, "link_placement": ("body" if fb_link_place == "body" else "comments"), "image_mode": fb_img_mode},
                 )
 
 
@@ -776,6 +859,9 @@ def _handle_publish_facebook(db, job: Job):
         raise ValueError("missing_page_id")
     placement = str(job.payload_json.get("link_placement") or "comments").strip().lower()
     placement = "body" if placement == "body" else "comments"
+    image_mode = str(job.payload_json.get("image_mode") or "link_preview").strip().lower()
+    if image_mode not in ("link_preview", "direct_photo", "none"):
+        image_mode = "link_preview"
 
     fb_state = outputs.get("facebook") if isinstance(outputs, dict) else None
     fb_state = fb_state if isinstance(fb_state, dict) else {}
@@ -803,12 +889,36 @@ def _handle_publish_facebook(db, job: Job):
     if not token:
         raise FacebookError("missing_facebook_page_token")
 
-    if placement == "body":
-        post_res = publish_page_post(page_id=page_id, page_access_token=token, message=fb_text, link=wp_url)
-        comment_id = None
-    else:
+    comment_id = None
+    if image_mode == "direct_photo":
+        # Upload the post image directly as a photo with caption
+        image_url = _get_output_image_url(outputs, fallback_url=content.lead_image_url)
+        if image_url:
+            caption = fb_text
+            if placement == "body":
+                caption = f"{fb_text}\n\n{wp_url}"
+            post_res = publish_page_photo(page_id=page_id, page_access_token=token, photo_url=image_url, caption=caption)
+            if placement == "comments":
+                comment_id = comment_on_post(post_id=post_res.post_id, page_access_token=token, message=wp_url)
+        else:
+            # No image available — fall back to text post
+            if placement == "body":
+                post_res = publish_page_post(page_id=page_id, page_access_token=token, message=fb_text, link=wp_url)
+            else:
+                post_res = publish_page_post(page_id=page_id, page_access_token=token, message=fb_text, link=None)
+                comment_id = comment_on_post(post_id=post_res.post_id, page_access_token=token, message=wp_url)
+    elif image_mode == "none":
+        # Text only — no link, no image
         post_res = publish_page_post(page_id=page_id, page_access_token=token, message=fb_text, link=None)
-        comment_id = comment_on_post(post_id=post_res.post_id, page_access_token=token, message=wp_url)
+        if placement == "comments":
+            comment_id = comment_on_post(post_id=post_res.post_id, page_access_token=token, message=wp_url)
+    else:
+        # link_preview (default): Facebook generates preview from the link
+        if placement == "body":
+            post_res = publish_page_post(page_id=page_id, page_access_token=token, message=fb_text, link=wp_url)
+        else:
+            post_res = publish_page_post(page_id=page_id, page_access_token=token, message=fb_text, link=None)
+            comment_id = comment_on_post(post_id=post_res.post_id, page_access_token=token, message=wp_url)
 
     pages_state.append(
         {
@@ -825,7 +935,7 @@ def _handle_publish_facebook(db, job: Job):
     post.outputs_json = outputs
     post.updated_at = datetime.utcnow()
     db.add(post)
-    log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_FACEBOOK_PUBLISH, status="ok", message="facebook_published", meta={"page_id": page_id, "placement": placement, "fb_post_id": post_res.post_id})
+    log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_FACEBOOK_PUBLISH, status="ok", message="facebook_published", meta={"page_id": page_id, "placement": placement, "image_mode": image_mode, "fb_post_id": post_res.post_id})
 
 
 def _parse_ai_json(text: str) -> dict:
@@ -875,13 +985,22 @@ def _extract_title_from_site_text(site_text: str) -> str:
     if not raw:
         return ""
     lines = raw.splitlines()
-    for ln in lines[:10]:
+    for ln in lines[:15]:
         s = ln.strip()
         if not s:
             continue
+        # Strip markdown heading markers
         s = re.sub(r"^\s{0,3}#{1,6}\s*", "", s).strip()
-        s = re.sub(r"^[*_]{1,3}\s*", "", s).strip()
-        return s
+        # Strip bold markers at start/end
+        s = re.sub(r"^\*{1,3}\s*", "", s).strip()
+        s = re.sub(r"\s*\*{1,3}$", "", s).strip()
+        # Strip "Título:", "Title:", "título:" labels that AI adds as section prefixes
+        s = re.sub(r"^(?:título|titulo|title)\s*[:\-]\s*", "", s, flags=re.IGNORECASE).strip()
+        # Skip pure section labels (short line ending with colon)
+        if s.endswith(":") and len(s.split()) <= 5:
+            continue
+        if s and len(s) >= 5:
+            return s
     return ""
 
 
@@ -1009,13 +1128,39 @@ def _escape_keep_strong(s: str) -> str:
 
 
 def _render_wp_html(text: str) -> str:
+    """Convert markdown (or plain text) from AI output to WordPress-ready HTML."""
     raw = (text or "").strip()
     if not raw:
         return ""
+
+    main_heads = {
+        "ingredientes", "modo de preparo", "preparo", "dicas",
+        "tempo de preparo", "tempo e rendimento", "rendimento",
+        "montagem", "finalizacao", "finalização", "como fazer",
+        "como assar", "como servir", "introducao", "introdução",
+    }
+    main_norms = {_norm_title(x) for x in main_heads}
+
+    def _strip_inline_md(s: str) -> str:
+        s = re.sub(r"\*\*(.*?)\*\*", r"\1", s)
+        s = re.sub(r"__(.*?)__", r"\1", s)
+        s = re.sub(r"\*(.*?)\*", r"\1", s)
+        return s.strip("*_").strip()
+
+    def _process_inline(s: str) -> str:
+        # Convert markdown **bold** → <strong>, then HTML-escape preserving <strong>
+        s = re.sub(r"\*\*\s*(.*?)\s*\*\*", r"<strong>\1</strong>", s)
+        s = re.sub(r"__\s*(.*?)\s*__", r"<strong>\1</strong>", s)
+        # Remove leftover single * or _
+        s = re.sub(r"(?<!\*)\*(?!\*)([^*\n]*?)(?<!\*)\*(?!\*)", r"\1", s)
+        return _escape_keep_strong(s)
+
     lines = raw.splitlines()
     out: list[str] = []
+    state: dict = {"list": None}
+    para: list[str] = []
 
-    def close_list(state: dict):
+    def close_list() -> None:
         lt = state.get("list")
         if lt == "ul":
             out.append("</ul>")
@@ -1023,149 +1168,91 @@ def _render_wp_html(text: str) -> str:
             out.append("</ol>")
         state["list"] = None
 
-    state = {"list": None, "last_step_heading": False}
-    main_heads = {
-        "ingredientes",
-        "modo de preparo",
-        "preparo",
-        "dicas",
-        "tempo de preparo",
-        "tempo e rendimento",
-        "rendimento",
-        "montagem",
-        "finalizacao",
-        "finalização",
-        "como fazer",
-        "como assar",
-        "como servir",
-    }
-    main_norms = {_norm_title(x) for x in main_heads}
+    def flush_para() -> None:
+        if para:
+            close_list()
+            out.append(f"<p>{_process_inline(' '.join(para).strip())}</p>")
+            para.clear()
 
     i = 0
-    para: list[str] = []
     while i < len(lines):
         ln = (lines[i] or "").rstrip()
         s = ln.strip()
+
         if not s:
-            if para:
-                close_list(state)
-                out.append(f"<p>{_escape_keep_strong(' '.join(para).strip())}</p>")
-                para = []
-            else:
-                close_list(state)
+            flush_para()
+            close_list()
             i += 1
             continue
 
-        is_bullet = s.startswith("• ")
-        candidate = re.sub(r"[:：]\s*$", "", s).strip()
-        candidate_plain = re.sub(r"</?strong>", "", candidate, flags=re.IGNORECASE).strip()
-        is_number = bool(re.match(r"^\d+[.)]\s+", candidate_plain))
-        norm = _norm_title(candidate_plain)
-
-        is_main_heading = norm in main_norms or norm.startswith("ingredientes") or norm.startswith("como ")
-
-        words = [w for w in re.split(r"\s+", candidate_plain) if w]
-        cap_words = [w for w in words if w[:1].isupper()]
-        title_caseish = bool(words) and (len(cap_words) / max(1, len(words))) >= 0.75 and len(candidate_plain) <= 90 and len(words) <= 14
-
-        para_headingish = (
-            candidate_plain.lower().startswith("para ")
-            or candidate_plain.lower().startswith("para a ")
-            or candidate_plain.lower().startswith("para o ")
-            or candidate_plain.lower().startswith("para os ")
-            or candidate_plain.lower().startswith("para as ")
-        ) and len(candidate_plain) <= 90
-
-        m_step = re.match(r"^(\d+)[.)]\s+(.+)$", candidate_plain)
-        step_heading = False
-        if m_step:
-            rest = m_step.group(2).strip()
-            rest_words = [w for w in re.split(r"\s+", rest) if w]
-            rest_caps = [w for w in rest_words if w[:1].isupper()]
-            rest_title_caseish = bool(rest_words) and (len(rest_caps) / max(1, len(rest_words))) >= 0.5
-            step_heading = len(rest) <= 90 and len(rest_words) <= 14 and rest_title_caseish
-
-        looks_heading = (
-            is_main_heading
-            or para_headingish
-            or title_caseish
-            or step_heading
-            or (candidate_plain.isupper() and len(candidate_plain) <= 80 and len(words) <= 10 and not is_number and not is_bullet)
-            or (len(candidate_plain) <= 80 and candidate_plain.endswith(":") and not is_number and not is_bullet)
-        )
-
-        if looks_heading:
-            if para:
-                close_list(state)
-                out.append(f"<p>{_escape_keep_strong(' '.join(para).strip())}</p>")
-                para = []
-            close_list(state)
-            heading_text = candidate_plain
-            tag = "h2" if is_main_heading else "h3"
+        # 1. Markdown heading: # Title or ## Title or ### Title
+        m_head = re.match(r"^(#{1,6})\s+(.+)$", s)
+        if m_head:
+            flush_para()
+            close_list()
+            level = len(m_head.group(1))
+            heading_text = _strip_inline_md(m_head.group(2).strip())
+            tag = "h2" if level <= 2 else "h3"
             out.append(f"<{tag}>{_escape_keep_strong(heading_text)}</{tag}>")
-            state["last_step_heading"] = bool(step_heading)
             i += 1
             continue
 
-        if is_bullet:
-            if para:
-                close_list(state)
-                out.append(f"<p>{_escape_keep_strong(' '.join(para).strip())}</p>")
-                para = []
+        # 2. Bullet list: • item or - item or * item
+        m_bullet = re.match(r"^[•\-\*]\s+(.+)$", s)
+        if m_bullet:
+            flush_para()
             if state.get("list") != "ul":
-                close_list(state)
+                close_list()
                 out.append("<ul>")
                 state["list"] = "ul"
-            out.append(f"<li>{_escape_keep_strong(s[2:].strip())}</li>")
-            state["last_step_heading"] = False
+            out.append(f"<li>{_process_inline(_strip_inline_md(m_bullet.group(1).strip()))}</li>")
             i += 1
             continue
 
-        if is_number:
-            if state.get("last_step_heading"):
-                item = re.sub(r"^\d+[.)]\s+", "", candidate_plain).strip()
-                para.append(item)
+        # 3. Numbered list: 1. item or 1) item
+        m_num = re.match(r"^\d+[.)]\s+(.+)$", s)
+        if m_num:
+            flush_para()
+            if state.get("list") != "ol":
+                close_list()
+                out.append("<ol>")
+                state["list"] = "ol"
+            out.append(f"<li>{_process_inline(_strip_inline_md(m_num.group(1).strip()))}</li>")
+            i += 1
+            continue
+
+        # 4. Bold-only line as heading: **Section Name** or **Section Name:**
+        m_bold_only = re.match(r"^\*\*\s*(.+?)\s*\*\*\s*:?\s*$", s)
+        if m_bold_only:
+            candidate = _strip_inline_md(m_bold_only.group(1).strip())
+            if len(candidate) <= 90:
+                flush_para()
+                close_list()
+                norm = _norm_title(candidate)
+                tag = "h2" if (norm in main_norms or norm.startswith("ingredientes") or norm.startswith("como ")) else "h3"
+                out.append(f"<{tag}>{_escape_keep_strong(candidate)}</{tag}>")
                 i += 1
                 continue
-            nxt = ""
-            j = i + 1
-            while j < len(lines):
-                nxt = (lines[j] or "").strip()
-                if nxt:
-                    break
-                j += 1
-            next_plain = re.sub(r"</?strong>", "", nxt, flags=re.IGNORECASE).strip() if nxt else ""
-            next_is_number = bool(next_plain and re.match(r"^\d+[.)]\s+", next_plain))
-            next_is_bullet = bool(next_plain and next_plain.startswith("• "))
-            if para:
-                close_list(state)
-                out.append(f"<p>{_escape_keep_strong(' '.join(para).strip())}</p>")
-                para = []
-            if next_is_number:
-                if state.get("list") != "ol":
-                    close_list(state)
-                    out.append("<ol>")
-                    state["list"] = "ol"
-                item = re.sub(r"^\d+[.)]\s+", "", candidate_plain).strip()
-                out.append(f"<li>{_escape_keep_strong(item)}</li>")
-            else:
-                close_list(state)
-                item = re.sub(r"^\d+[.)]\s+", "", candidate_plain).strip()
-                para.append(item)
-            state["last_step_heading"] = False
+
+        # 5. Known section name (plain text, possibly ending with colon)
+        candidate_plain = _strip_inline_md(re.sub(r"[:：]\s*$", "", s).strip())
+        norm = _norm_title(candidate_plain)
+        is_main = norm in main_norms or norm.startswith("ingredientes") or norm.startswith("como ")
+        is_short_colon = (s.endswith(":") or s.endswith("：")) and len(candidate_plain) <= 60 and len(candidate_plain.split()) <= 8
+        if is_main or is_short_colon:
+            flush_para()
+            close_list()
+            tag = "h2" if is_main else "h3"
+            out.append(f"<{tag}>{_escape_keep_strong(candidate_plain)}</{tag}>")
             i += 1
             continue
 
-        close_list(state)
+        # 6. Regular paragraph text
+        close_list()
         para.append(s)
-        state["last_step_heading"] = False
         i += 1
 
-    if para:
-        close_list(state)
-        out.append(f"<p>{_escape_keep_strong(' '.join(para).strip())}</p>")
-    else:
-        close_list(state)
+    flush_para()
     return "\n".join(out).strip()
 
 def process_job(db, job: Job):
@@ -1216,40 +1303,15 @@ def run_worker_tick(*, worker_id: str) -> bool:
                 meta={"attempt": job.attempts + 1},
             )
             process_job(db, job)
-            job.status = JobStatus.succeeded
+            canceled_after = False
+            if job.post_id:
+                p = db.scalar(select(Post).where(Post.id == job.post_id, Post.user_id == job.user_id))
+                canceled_after = bool(p and isinstance(p.outputs_json, dict) and p.outputs_json.get("canceled_by_user"))
+            job.status = JobStatus.failed if canceled_after else JobStatus.succeeded
+            if canceled_after:
+                job.last_error = "canceled_by_user"
             job.updated_at = datetime.utcnow()
             db.add(job)
-            db.flush()
-            # Auto-stop: deactivate profile when queue is empty
-            if job.profile_id:
-                remaining_jobs = db.scalar(
-                    select(func.count()).select_from(Job).where(
-                        Job.profile_id == job.profile_id,
-                        Job.status.in_([JobStatus.queued, JobStatus.running]),
-                        Job.id != job.id,
-                    )
-                ) or 0
-                remaining_posts = db.scalar(
-                    select(func.count()).select_from(Post).where(
-                        Post.profile_id == job.profile_id,
-                        Post.status.in_([PostStatus.pending, PostStatus.processing]),
-                    )
-                ) or 0
-                if remaining_jobs == 0 and remaining_posts == 0:
-                    profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == job.profile_id))
-                    if profile and profile.active:
-                        profile.active = False
-                        profile.updated_at = datetime.utcnow()
-                        db.add(profile)
-                        log_event(
-                            db,
-                            user_id=job.user_id,
-                            profile_id=job.profile_id,
-                            stage="auto_stop",
-                            status="ok",
-                            message="bot_auto_stopped",
-                            meta={"reason": "queue_empty"},
-                        )
             db.commit()
             return True
         except (FacebookError, GeminiError, WordPressError, Exception) as e:

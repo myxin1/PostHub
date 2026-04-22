@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
@@ -14,9 +14,12 @@ def main():
     print("START", email)
 
     with httpx.Client(timeout=30.0) as c:
-        reg = c.post(f"{base}/api/auth/register", json={"email": email, "password": password})
+        reg = c.post(
+            f"{base}/api/auth/register",
+            json={"email": email, "password": password, "password_confirm": password},
+        )
         reg.raise_for_status()
-        token = c.post(f"{base}/api/auth/login", json={"email": email, "password": password}).json()["access_token"]
+        token = c.post(f"{base}/api/auth/login", json={"login": email, "password": password}).json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
         profile = c.post(
@@ -44,7 +47,7 @@ def main():
         logs = c.get(f"{base}/api/logs", headers=headers).json()
 
     print("EMAIL", email)
-    print("FINISHED_AT", datetime.utcnow().isoformat() + "Z")
+    print("FINISHED_AT", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
     print("LATEST_POST_STATUS", last_status)
     print("LATEST_LOGS", [(l["stage"], l["status"]) for l in logs[:12]])
 
