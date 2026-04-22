@@ -14,7 +14,7 @@ def _safe(s: object) -> str:
 
 
 def _ph(name: str) -> str:
-    """Placeholder de desenvolvimento — mostra label amarelo com ícones copiar/fechar."""
+    """Placeholder de desenvolvimento ” mostra label amarelo com ícones copiar/fechar."""
     return (
         f"<span class='dev-ph-wrap' style='display:inline-flex;align-items:center;gap:4px;font-size:9px;"
         f"font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#f59e0b;"
@@ -22,7 +22,7 @@ def _ph(name: str) -> str:
         f"border-radius:4px;padding:2px 6px;margin:2px 2px;vertical-align:middle'>"
         f"<span class='dev-ph'>📌 {name}</span>"
         f"<button type='button' title='Copiar' onclick=\"navigator.clipboard.writeText('{name}').then(function(){{this.textContent='✓'}}.bind(this))\" "
-        f"style='background:none;border:none;cursor:pointer;padding:0 2px;font-size:10px;color:#f59e0b;line-height:1' class='dev-ph'>⧉</button>"
+        f"style='background:none;border:none;cursor:pointer;padding:0 2px;font-size:10px;color:#f59e0b;line-height:1' class='dev-ph'>â§‰</button>"
         f"<button type='button' title='Ocultar' onclick=\"this.closest('.dev-ph-wrap').style.display='none'\" "
         f"style='background:none;border:none;cursor:pointer;padding:0 2px;font-size:10px;color:#f59e0b;line-height:1' class='dev-ph'>✕</button>"
         f"</span>"
@@ -220,11 +220,11 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{t} — PostHub</title>
+  <title>{t} ” PostHub</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/posthub.css?v=2" />
+  <link rel="stylesheet" href="/static/posthub.css?v=6" />
   <script>
     (function(){{
       var t = localStorage.getItem('posthub-theme') || 'roxo';
@@ -269,7 +269,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     <main class="main">
       <div class="topbar">
         <div style="display:flex;align-items:center;gap:12px">
-          <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" title="Ocultar/Mostrar barra lateral" onclick="toggleSidebar()">☰</button>
+          <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" title="Ocultar/Mostrar barra lateral" onclick="toggleSidebar()">â˜°</button>
           <h2 class="title">{t}</h2>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -770,7 +770,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
             (bots || []).forEach(function(b) {{
               var prev = _prevStatus[b.id];
               if (prev === true && !b.is_running) {{
-                // bot just stopped — show toast and refresh notification bell
+                // bot just stopped ” show toast and refresh notification bell
                 _showToast('&#9989; ' + b.name + ' parou. Veja as notificações.', 'success');
                 if (typeof window._phFetchFeed === 'function') window._phFetchFeed();
               }}
@@ -880,7 +880,8 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         var app = document.getElementById('app-root');
         if (!app) return;
         if (document.body.classList.contains('ph-mob-active') || window.innerWidth <= 900) {{
-          app.classList.toggle('mob-nav-open');
+          var isOpen = app.classList.toggle('mob-nav-open');
+          document.body.classList.toggle('ph-nav-open', isOpen);
           return;
         }}
         var collapsed = app.classList.toggle('sidebar-collapsed');
@@ -892,6 +893,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       window.phCloseMobNav = function() {{
         var app = document.getElementById('app-root');
         if (app) app.classList.remove('mob-nav-open');
+        document.body.classList.remove('ph-nav-open');
       }};
       /* Fecha drawer ao clicar em link de nav no mobile */
       document.addEventListener('click', function(e) {{
@@ -899,6 +901,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         if (e.target.closest('.nav a, .nav-sub a')) {{
           var app = document.getElementById('app-root');
           if (app) app.classList.remove('mob-nav-open');
+          document.body.classList.remove('ph-nav-open');
         }}
       }});
       if (localStorage.getItem('sidebar-collapsed') === '1') {{
@@ -915,6 +918,44 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     }})();
 
     // ── Diagnostic modal ─────────────────────────────────────────────────────
+    function phRenderDiagItem(item, icons) {{
+      var html = '<div class="diag-item ' + item.status + '">';
+      html += '<div class="diag-item-row">';
+      html += '<div class="diag-status-icon">' + (icons[item.status] || '&bull;') + '</div>';
+      html += '<div class="diag-item-content">';
+      html += '<div class="diag-label">' + item.label + '</div>';
+      if (item.desc) html += '<div class="diag-desc">' + item.desc + '</div>';
+      if (item.fix) html += '<div class="diag-fix">' + item.fix + '</div>';
+      html += '</div></div></div>';
+      return html;
+    }}
+    function phRenderDiagSummary(summary, soundLabel, siteLabel) {{
+      if (!summary) return '';
+      var intervalText = summary.interval_minutes > 0 ? summary.interval_minutes + ' min entre posts' : 'sem intervalo';
+      var sourceTypes = (summary.sources_types || []).join(', ') || '—';
+      var html = '<div class="diag-summary">';
+      html += '<div class="diag-summary-title">&#128203; Resumo da configura&#231;&#227;o</div>';
+      html += '<div class="diag-summary-grid">';
+      html += '<div><span style="color:var(--muted)">Posts por sess&#227;o:</span> <b>' + summary.posts_per_day + '</b></div>';
+      html += '<div><span style="color:var(--muted)">Intervalo:</span> <b>' + intervalText + '</b></div>';
+      html += '<div><span style="color:var(--muted)">Fontes:</span> <b>' + summary.sources_count + ' configurada' + (summary.sources_count !== 1 ? 's' : '') + '</b></div>';
+      html += '<div><span style="color:var(--muted)">Tipos:</span> <b>' + sourceTypes + '</b></div>';
+      html += '<div><span style="color:var(--muted)">Som:</span> <b>' + soundLabel + '</b></div>';
+      if (summary.wp_url) html += '<div style="grid-column:1/-1"><span style="color:var(--muted)">' + siteLabel + ':</span> <b>' + summary.wp_url + '</b></div>';
+      html += '</div></div>';
+      return html;
+    }}
+    function phRenderDiagFooter(closeFnName, startFnName, canStart, canReconnectStart, startText, reconnectText) {{
+      var footer = '<button type="button" class="btn secondary" onclick="' + closeFnName + '()">Fechar</button>';
+      if (canStart) {{
+        footer += '<button type="button" class="btn diag-action-primary" onclick="' + startFnName + '(false)">&#9658; ' + startText + '</button>';
+      }} else if (canReconnectStart) {{
+        footer += '<button type="button" class="btn diag-action-primary" onclick="' + startFnName + '(true)">&#8635; ' + reconnectText + '</button>';
+      }} else {{
+        footer += '<button type="button" class="btn" disabled style="opacity:.4;cursor:not-allowed">&#9658; ' + startText + '</button>';
+      }}
+      return footer;
+    }}
     function closeDiagModal() {{
       var overlay = document.getElementById('diagOverlay');
       if (overlay) overlay.classList.remove('open');
@@ -924,7 +965,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       if (autoInput) autoInput.value = autoReconnect ? '1' : '0';
       var footer = document.getElementById('diagFooter');
       if (footer) {{
-        footer.innerHTML = '<button type="button" class="btn" disabled style="min-width:180px;opacity:.7">&#9203; Reconectando...</button>';
+        footer.innerHTML = '<button type="button" class="btn" disabled style="opacity:.7">&#9203; Processando...</button>';
       }}
       closeDiagModal();
       document.getElementById('diagStartForm').submit();
@@ -954,42 +995,19 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           var icons = {{ok:'&#9989;', warn:'&#9888;&#65039;', err:'&#10060;'}};
           var out = '';
           (data.results || []).forEach(function(item) {{
-            out += '<div class="diag-item ' + item.status + '" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
-            out += '<div style="display:flex;align-items:flex-start;gap:10px">';
-            out += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">' + (icons[item.status] || '&bull;') + '</span>';
-            out += '<div style="flex:1">';
-            out += '<div style="font-weight:600;font-size:14px;margin-bottom:3px">' + item.label + '</div>';
-            if (item.desc) out += '<div style="font-size:12px;color:var(--muted);line-height:1.5">' + item.desc + '</div>';
-            if (item.fix) out += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.15);border-radius:7px;line-height:1.5">' + item.fix + '</div>';
-            out += '</div></div></div>';
+            out += phRenderDiagItem(item, icons);
           }});
           document.getElementById('diagItems').innerHTML = out || '<div style="padding:20px;text-align:center;color:var(--muted)">Nenhum resultado.</div>';
           var snd = (typeof window._phSoundLabel === 'function') ? window._phSoundLabel() : '&#129534; Caixa';
-          if (data.summary) {{
-            var s = data.summary;
-            var intText = s.interval_minutes > 0 ? s.interval_minutes + ' min entre posts' : 'sem intervalo';
-            var srcTypes = (s.sources_types || []).join(', ') || '—';
-            var sm = '<div style="margin-top:14px;padding:14px 16px;background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.2);border-radius:12px;font-size:13px">';
-            sm += '<div style="font-weight:700;font-size:13px;margin-bottom:10px;display:flex;align-items:center;gap:7px">&#128203; Resumo da configura\u00e7\u00e3o</div>';
-            sm += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px">';
-            sm += '<div><span style="color:var(--muted)">Posts por sess\u00e3o:</span> <b>' + s.posts_per_day + '</b></div>';
-            sm += '<div><span style="color:var(--muted)">Intervalo:</span> <b>' + intText + '</b></div>';
-            sm += '<div><span style="color:var(--muted)">Fontes:</span> <b>' + s.sources_count + ' configurada' + (s.sources_count !== 1 ? 's' : '') + '</b></div>';
-            sm += '<div><span style="color:var(--muted)">Tipos:</span> <b>' + srcTypes + '</b></div>';
-            sm += '<div><span style="color:var(--muted)">Som:</span> <b>' + snd + '</b></div>';
-            if (s.wp_url) sm += '<div style="grid-column:1/-1"><span style="color:var(--muted)">Site WordPress:</span> <b>' + s.wp_url + '</b></div>';
-            sm += '</div></div>';
-            document.getElementById('diagItems').innerHTML += sm;
-          }}
-          var footer = '<button type="button" class="btn secondary" onclick="closeDiagModal()" style="min-width:80px">Fechar</button>';
-          if (data.can_start) {{
-            footer += '<button type="button" class="btn" onclick="confirmDiagStart(false)" style="min-width:130px;background:#10b981;border-color:#10b981;color:#fff">&#9658; Iniciar Rob\u00f4</button>';
-          }} else if (data.can_reconnect_start) {{
-            footer += '<button type="button" class="btn" onclick="confirmDiagStart(true)" style="min-width:180px;background:#10b981;border-color:#10b981;color:#fff">&#8635; Reconectar e iniciar</button>';
-          }} else {{
-            footer += '<button type="button" class="btn" disabled style="min-width:130px;opacity:.4;cursor:not-allowed">&#9658; Iniciar Rob\u00f4</button>';
-          }}
-          document.getElementById('diagFooter').innerHTML = footer;
+          document.getElementById('diagItems').innerHTML += phRenderDiagSummary(data.summary, snd, 'Site WordPress');
+          document.getElementById('diagFooter').innerHTML = phRenderDiagFooter(
+            'closeDiagModal',
+            'confirmDiagStart',
+            !!data.can_start,
+            !!data.can_reconnect_start,
+            'Iniciar Rob\u00f4',
+            'Reconectar e iniciar'
+          );
         }})
         .catch(function(err) {{
           document.getElementById('diagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">&#10060; Erro: ' + err.message + '</div>';
@@ -1024,7 +1042,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         if (btn) btn.classList.remove('open');
       }};
       window.phCloseMobPreview = function() {{
-        document.body.classList.remove('ph-mob-active');
+        document.body.classList.remove('ph-mob-active', 'ph-nav-open');
         localStorage.removeItem('ph-mob-active');
         var root = document.getElementById('app-root');
         if (root) {{ root.style.width = ''; root.style.minWidth = ''; root.style.maxWidth = ''; root.classList.remove('mob-nav-open'); }}
@@ -1081,11 +1099,11 @@ def login_page(request: Request):
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Entrar — PostHub</title>
+  <title>Entrar ” PostHub</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/posthub.css?v=2" />
+  <link rel="stylesheet" href="/static/posthub.css?v=6" />
   <style>
     html, body {{
       min-height: 100vh;
@@ -1211,7 +1229,7 @@ def _get_or_create_single_bot(db, *, user: User) -> AutomationProfile:
         if _ensure_publish_config_defaults(db, bot=bot):
             db.commit()
         return bot
-    # Nenhum ativo — retorna o primeiro sem forçar ativação
+    # Nenhum ativo ” retorna o primeiro sem forçar ativação
     bot = db.scalar(
         select(AutomationProfile)
         .where(AutomationProfile.user_id == uid)
@@ -1222,7 +1240,7 @@ def _get_or_create_single_bot(db, *, user: User) -> AutomationProfile:
         if _ensure_publish_config_defaults(db, bot=bot):
             db.commit()
         return bot
-    # Nenhum perfil — cria o primeiro
+    # Nenhum perfil ” cria o primeiro
     bot = AutomationProfile(
         user_id=uid, name="Meu Primeiro Robô", active=True,
         schedule_config_json={"posts_per_day": 15, "interval_minutes": 60},
@@ -1298,7 +1316,7 @@ _NEW_BOT_WIZARD_HTML = """
 }
 #new-bot-wizard.wz-open { display: block !important; }
 
-/* ── Panel — centrado por CSS, sem inline style ───── */
+/* ── Panel ” centrado por CSS, sem inline style ───── */
 #wz-panel {
   position: fixed;
   left: 50%;
@@ -1519,14 +1537,14 @@ _NEW_BOT_WIZARD_HTML = """
         <input id="wz-gemini-key" class="wz-input" type="password" placeholder="AIzaSy..." autocomplete="off" style="margin-bottom:14px" />
         <label class="wz-label">MODELO</label>
         <select id="wz-gemini-model" class="wz-input" style="padding:10px 13px;cursor:pointer">
-          <option value="gemini-2.0-flash">gemini-2.0-flash — Rápido, mais recente ⚡</option>
-          <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite — Leve e econômico 🪶</option>
-          <option value="gemini-1.5-flash-latest" selected>gemini-1.5-flash-latest — Padrão recomendado ✅</option>
-          <option value="gemini-1.5-flash-8b">gemini-1.5-flash-8b — Ultra rápido, menor 🏎</option>
-          <option value="gemini-1.5-pro-latest">gemini-1.5-pro-latest — Mais inteligente, mais lento 🧠</option>
-          <option value="gemini-2.0-pro-exp">gemini-2.0-pro-exp — Experimental, Pro 2.0 🔬</option>
+          <option value="gemini-2.0-flash">gemini-2.0-flash ” Rápido, mais recente ⚡</option>
+          <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite ” Leve e econômico 🪶</option>
+          <option value="gemini-1.5-flash-latest" selected>gemini-1.5-flash-latest ” Padrão recomendado ✅</option>
+          <option value="gemini-1.5-flash-8b">gemini-1.5-flash-8b ” Ultra rápido, menor 🏎</option>
+          <option value="gemini-1.5-pro-latest">gemini-1.5-pro-latest ” Mais inteligente, mais lento 🧠</option>
+          <option value="gemini-2.0-pro-exp">gemini-2.0-pro-exp ” Experimental, Pro 2.0 🔬</option>
         </select>
-        <div style="margin-top:8px;font-size:11px;color:var(--muted)">Dúvida? Deixe <b>gemini-1.5-flash-latest</b> — funciona bem para a maioria dos casos.</div>
+        <div style="margin-top:8px;font-size:11px;color:var(--muted)">Dúvida? Deixe <b>gemini-1.5-flash-latest</b> ” funciona bem para a maioria dos casos.</div>
       </div>
 
       <!-- Step 4: Resumo -->
@@ -1638,10 +1656,10 @@ _NEW_BOT_WIZARD_HTML = """
     rows += _row(emoji, 'Projeto',   name || '<em style="color:#ef4444">Não informado</em>', !!name);
     rows += (wpUrl && wpUser)
       ? _row('🔵', 'WordPress', wpUrl + ' <span style="opacity:.7;font-weight:400">(@' + wpUser + ')</span>', true)
-      : _row('🔧', 'WordPress', '<span style="opacity:.6;font-weight:400">Não configurado — adicione depois</span>', false);
+      : _row('🔧', 'WordPress', '<span style="opacity:.6;font-weight:400">Não configurado ” adicione depois</span>', false);
     rows += gem
       ? _row('✨', 'Gemini AI', 'Chave configurada ✓', true)
-      : _row('✨', 'Gemini AI', '<span style="opacity:.6;font-weight:400">Não configurado — adicione depois</span>', false);
+      : _row('✨', 'Gemini AI', '<span style="opacity:.6;font-weight:400">Não configurado ” adicione depois</span>', false);
     document.getElementById('wz-summary').innerHTML = rows;
   }
 
@@ -1674,7 +1692,7 @@ _NEW_BOT_WIZARD_HTML = """
     _justDragged = false;
   });
 
-  /* ── Drag (mouse — desktop) ────────────────────── */
+  /* ── Drag (mouse ” desktop) ────────────────────── */
   var _drag = { on: false, sx:0, sy:0, ox:0, oy:0 };
 
   function _isMobile() { return window.matchMedia('(max-width:480px)').matches; }
@@ -1718,7 +1736,7 @@ _NEW_BOT_WIZARD_HTML = """
   var _touch = { on: false, sx:0, sy:0, ox:0, oy:0 };
 
   _handle.addEventListener('touchstart', function(e) {
-    if (_isMobile()) return; /* bottom-sheet on phone — no drag */
+    if (_isMobile()) return; /* bottom-sheet on phone ” no drag */
     var t = e.touches[0];
     _anchorPanel();
     _touch.on = true;
@@ -1865,7 +1883,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     banner = ""
     if msg:
         banner = f"<div class='card' style='border-color: rgba(255,255,255,.08)'><b>{html.escape(msg)}</b></div>"
-    # ── Batch stats de todos os projetos — 2 queries no total ───────────────────
+    # ── Batch stats de todos os projetos ” 2 queries no total ───────────────────
     _all_ids = [pr.id for pr in all_profiles]
     # Post counts por projeto (1 query)
     _proj_post_rows = db.execute(
@@ -2081,14 +2099,14 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
         )
         _pub_alert = ""
         if _any_running:
-            _pub_alert = "<div class='publishing-alert'><span class='pal-dot'></span>&#9889; Bot publicando agora — clique em <strong>Rodando...</strong> para interromper</div>"
+            _pub_alert = "<div class='publishing-alert'><span class='pal-dot'></span>&#9889; Bot publicando agora ” clique em <strong>Rodando...</strong> para interromper</div>"
 
         _active_banner = f"""
     <div class="active-project-banner" style="margin-bottom:14px;flex-direction:column;align-items:stretch;gap:10px">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <div>
           <div class="active-project-label">Robôs ativos</div>
-          <div style="font-size:13px;color:var(--muted);margin-top:2px">{active_count} de {MAX_ACTIVE} ligados — clique em Iniciar para processar agora</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:2px">{active_count} de {MAX_ACTIVE} ligados ” clique em Iniciar para processar agora</div>
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn secondary" style="font-size:13px;padding:7px 14px" type="button" onclick="openWizard()">+ Novo Projeto</button>
@@ -2253,21 +2271,23 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     """
     diag_modal = """
     <div class="diag-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagModal()">
-      <div class="diag-modal" style="padding:22px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div class="diag-modal">
+        <div class="diag-header">
           <div>
             <div style="font-weight:700;font-size:17px">Diagn&#243;stico antes de iniciar</div>
             <div id="diagBotName" style="font-size:12px;color:var(--muted);margin-top:2px"></div>
           </div>
-          <button onclick="closeDiagModal()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
+          <button class="diag-close" type="button" onclick="closeDiagModal()">&times;</button>
         </div>
+        <div class="diag-body">
         <div id="diagItems" style="display:flex;flex-direction:column;gap:10px;min-height:80px">
           <div style="text-align:center;padding:32px;color:var(--muted)">
             <div style="font-size:28px;margin-bottom:8px">&#9203;</div>
             Verificando configura&#231;&#245;es...
           </div>
         </div>
-        <div id="diagFooter" style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end"></div>
+        </div>
+        <div id="diagFooter" class="diag-footer"></div>
       </div>
     </div>
     <form id="diagStartForm" method="post" action="/app/robot/start" style="display:none">
@@ -2303,7 +2323,10 @@ def _test_wordpress_connection(*, base_url: str, active_user: dict | None, timeo
     import base64 as _b64
     from urllib.parse import urljoin as _urljoin
 
+    import certifi as _certifi
     import httpx as _httpx
+
+    from app.services.wordpress import WORDPRESS_USER_AGENT
 
     if not base_url:
         return {"ok": False, "retryable": False, "label": "URL do site nao informada", "detail": "Base URL vazia."}
@@ -2314,8 +2337,20 @@ def _test_wordpress_connection(*, base_url: str, active_user: dict | None, timeo
     app_password = str(active_user.get("app_password") or "")
     token = _b64.b64encode(f"{username}:{app_password}".encode("utf-8")).decode("ascii")
     test_url = _urljoin(base_url.rstrip("/") + "/", "wp-json/wp/v2/users/me?context=edit")
+    verify = False if settings.http_insecure_skip_verify else _certifi.where()
     try:
-        resp = _httpx.get(test_url, headers={"Authorization": f"Basic {token}"}, timeout=timeout, follow_redirects=True, verify=False)
+        resp = _httpx.get(
+            test_url,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Basic {token}",
+                "User-Agent": WORDPRESS_USER_AGENT,
+            },
+            timeout=timeout,
+            follow_redirects=True,
+            trust_env=False,
+            verify=verify,
+        )
     except Exception as e:
         return {
             "ok": False,
@@ -2489,14 +2524,18 @@ def robot_start(
 
 @router.get("/app/robot/diagnose", include_in_schema=False)
 def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
-    """Diagnóstico rápido: verifica WP credentials + fontes antes de iniciar."""
+    """Diagnostico rapido: verifica WP credentials + fontes antes de iniciar."""
+    import traceback as _tb
     from fastapi.responses import JSONResponse
-    if bot_id:
-        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
-        if not bot:
-            return JSONResponse({"error": "bot not found", "results": [], "can_start": False}, status_code=404)
-    else:
-        bot = _get_or_create_single_bot(db, user=user)
+    try:
+        if bot_id:
+            bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
+            if not bot:
+                return JSONResponse({"error": "bot not found", "results": [], "can_start": False}, status_code=404)
+        else:
+            bot = _get_or_create_single_bot(db, user=user)
+    except Exception as _e:
+        return JSONResponse({"error": f"init error: {_tb.format_exc()[:800]}", "results": [], "can_start": False}, status_code=500)
     results = []
 
     # ── 1. WordPress ────────────────────────────────────────────
@@ -2530,11 +2569,11 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
                 display_name = wp_test.get("display_name") or active_user["username"]
                 roles = wp_test.get("roles") or []
                 if not any(r in roles for r in ("administrator", "editor", "author")):
-                    results.append({"key": "wordpress", "status": "warn", "label": f"WordPress conectado — {display_name}",
+                    results.append({"key": "wordpress", "status": "warn", "label": f"WordPress conectado ” {display_name}",
                                      "desc": f"Usuário autenticado mas pode não ter permissão para publicar (role: {', '.join(roles) or 'desconhecido'}).",
                                      "fix": "Use um usuário com role <b>Administrator</b> ou <b>Editor</b>."})
                 else:
-                    results.append({"key": "wordpress", "status": "ok", "label": f"WordPress OK — {display_name}",
+                    results.append({"key": "wordpress", "status": "ok", "label": f"WordPress OK ” {display_name}",
                                      "desc": f"Conectado em <b>{base_url}</b> com role <b>{', '.join(roles)}</b>."})
             elif wp_test.get("status_code") == 401:
                 results.append({"key": "wordpress", "status": "err", "label": "Credenciais inválidas",
@@ -2724,7 +2763,7 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
             img_label = {"link_preview": "preview do link WP", "direct_photo": "imagem direta", "none": "sem imagem"}.get(fb_image_mode, fb_image_mode)
             results.append({
                 "key": "facebook", "status": "ok",
-                "label": f"Facebook OK — {len(valid_pages)} página(s) pronta(s)",
+                "label": f"Facebook OK ” {len(valid_pages)} página(s) pronta(s)",
                 "desc": f"Páginas: {', '.join(valid_pages[:3])}{'...' if len(valid_pages)>3 else ''}. Imagem: {img_label}.",
             })
 
@@ -2785,7 +2824,7 @@ def robot_stop(bot_id: str = Form(default=None), user: User = Depends(get_curren
 
 @router.get("/app/robot/status", include_in_schema=False)
 def robot_status(user: User = Depends(get_current_user), db=Depends(get_db)):
-    """JSON: list of active bots with is_running flag — used by frontend polling."""
+    """JSON: list of active bots with is_running flag ” used by frontend polling."""
     profiles = list(db.scalars(select(AutomationProfile).where(AutomationProfile.user_id == user.id, AutomationProfile.active.is_(True))))
     result = []
     for p in profiles:
@@ -3550,7 +3589,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
               </div>
               <div class="card" style="margin-bottom:18px;padding:18px 22px">
                 <div style="font-weight:700;font-size:14px;margin-bottom:4px">Categorias do site</div>
-                <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Liste <b>exatamente</b> como aparecem no WordPress — uma por linha. A IA escolhe 1 dessa lista.</div>
+                <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Liste <b>exatamente</b> como aparecem no WordPress ” uma por linha. A IA escolhe 1 dessa lista.</div>
                 <textarea name="categories" placeholder="Receitas&#10;Viagens&#10;Tecnologia&#10;Sa&#250;de" style="min-height:180px;font-size:13px">{html.escape(cats_lines)}</textarea>
                 <div style="margin-top:8px;font-size:11px;color:var(--muted)">Categorias com nomes diferentes do WordPress causam erros de classifica&#231;&#227;o.</div>
               </div>
@@ -3649,10 +3688,10 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             )
             fb_rows += (
                 f"<tr style='border-top:1px solid var(--border)'>"
-                f"<td style='padding:12px 18px;font-size:13px;font-weight:600'>{html.escape(nm) or '—'}</td>"
+                f"<td style='padding:12px 18px;font-size:13px;font-weight:600'>{html.escape(nm) or '”'}</td>"
                 f"<td style='padding:12px 18px;font-size:13px;color:var(--muted);font-family:monospace'>{html.escape(pid)}</td>"
                 f"<td style='padding:12px 18px'><span class='pill'>{html.escape(token_state)}</span></td>"
-                f"<td id='{_fb_test_btn_id}-status' style='padding:12px 18px;font-size:12px;color:var(--muted)'>—</td>"
+                f"<td id='{_fb_test_btn_id}-status' style='padding:12px 18px;font-size:12px;color:var(--muted)'>”</td>"
                 f"<td style='padding:12px 18px;text-align:right'><div style='display:flex;gap:6px;justify-content:flex-end;align-items:center'>"
                 f"{_fb_test_btn}"
                 f"<form method='post' action='/app/profiles/{p.id}/integrations/facebook/pages/remove' style='margin:0'>"
@@ -3670,10 +3709,10 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             except Exception:
                 icreds = {}
             if i.type == IntegrationType.WORDPRESS:
-                conn_url = str(icreds.get("base_url") or "—")
+                conn_url = str(icreds.get("base_url") or "”")
             elif i.type == IntegrationType.FACEBOOK:
                 pages_list = icreds.get("pages") or []
-                conn_url = f"{len(pages_list)} página(s)" if pages_list else "—"
+                conn_url = f"{len(pages_list)} página(s)" if pages_list else "”"
             elif i.type == IntegrationType.GEMINI:
                 model_name = str(icreds.get("model") or "gemini-1.5-flash-latest")
                 conn_url = model_name
@@ -3724,7 +3763,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             _edit_row_id = "wp-edit-" + _pid
             status_badge = "<span class='badge-active' style='font-size:11px;padding:3px 8px'><span class='dot-pulse'></span>Em uso</span>" if is_active_wu else "<span class='badge-inactive' style='font-size:11px;padding:3px 8px'><span class='dot-off'></span>Inativo</span>"
             usar_btn = (
-                "<span style='font-size:11px;color:var(--muted)'>—</span>"
+                "<span style='font-size:11px;color:var(--muted)'>”</span>"
                 if is_active_wu else
                 f"<form method='post' action='/app/profiles/{p.id}/integrations/wordpress/set-active-user' style='margin:0'>"
                 f"<input type='hidden' name='username' value='{uname}' />"
@@ -3878,12 +3917,12 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             </details>"""
         elif itab == "gemini":
             _gem_models = [
-                ("gemini-2.0-flash",       "gemini-2.0-flash — Rápido, mais recente ⚡"),
-                ("gemini-2.0-flash-lite",  "gemini-2.0-flash-lite — Leve e econômico 🪶"),
-                ("gemini-1.5-flash-latest","gemini-1.5-flash-latest — Padrão recomendado ✅"),
-                ("gemini-1.5-flash-8b",    "gemini-1.5-flash-8b — Ultra rápido, menor 🏎"),
-                ("gemini-1.5-pro-latest",  "gemini-1.5-pro-latest — Mais inteligente, mais lento 🧠"),
-                ("gemini-2.0-pro-exp",     "gemini-2.0-pro-exp — Experimental, Pro 2.0 🔬"),
+                ("gemini-2.0-flash",       "gemini-2.0-flash ” Rápido, mais recente ⚡"),
+                ("gemini-2.0-flash-lite",  "gemini-2.0-flash-lite ” Leve e econômico 🪶"),
+                ("gemini-1.5-flash-latest","gemini-1.5-flash-latest ” Padrão recomendado ✅"),
+                ("gemini-1.5-flash-8b",    "gemini-1.5-flash-8b ” Ultra rápido, menor 🏎"),
+                ("gemini-1.5-pro-latest",  "gemini-1.5-pro-latest ” Mais inteligente, mais lento 🧠"),
+                ("gemini-2.0-pro-exp",     "gemini-2.0-pro-exp ” Experimental, Pro 2.0 🔬"),
             ]
             _gem_model_opts = "".join(
                 f"<option value='{v}' {'selected' if v == gem_current_model else ''}>{html.escape(l)}</option>"
@@ -3927,7 +3966,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                     <div style="display:flex;align-items:flex-end;gap:8px;padding-bottom:2px">
                       <button type="button"
                         onclick="var f=document.getElementById('gem-edit-form');f.style.display=f.style.display==='none'?'block':'none'"
-                        class="btn secondary" style="flex:1;justify-content:center">✏️ Editar</button>
+                        class="btn secondary" style="flex:1;justify-content:center">✏ï¸ Editar</button>
                       <form method="post" action="/app/profiles/{p.id}/integrations/{_gem_integ_id}/delete" style="margin:0;flex:1">
                         <button class="btn secondary" type="submit" style="width:100%;justify-content:center;color:#ef4444"
                           onclick="return confirm('Remover integração Gemini?')">
@@ -3940,7 +3979,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                   </div>
                 </div>"""
                 _gem_form_display = "display:none"
-                _gem_form_label = "✏️ Editar chave / modelo"
+                _gem_form_label = "✏ï¸ Editar chave / modelo"
             else:
                 _gem_list = ""
                 _gem_form_display = "display:block"
@@ -3971,7 +4010,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                     <select name="model" style="width:100%;padding:10px 13px;border-radius:9px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:13px;cursor:pointer">
                       {_gem_model_opts}
                     </select>
-                    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Dúvida? Deixe <b>gemini-1.5-flash-latest</b> — bom para a maioria dos casos.</div>
+                    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Dúvida? Deixe <b>gemini-1.5-flash-latest</b> ” bom para a maioria dos casos.</div>
                   </div>
                 </div>
                 <div style="margin-top:20px;display:flex;gap:10px">
@@ -3982,10 +4021,10 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             </div>"""
         elif itab == "openai":
             _oai_models = [
-                ("gpt-4o-mini",   "gpt-4o-mini — Rápido e econômico ⚡"),
-                ("gpt-4o",        "gpt-4o — Mais inteligente, multimodal 🧠"),
-                ("gpt-4-turbo",   "gpt-4-turbo — GPT-4 otimizado 🚀"),
-                ("gpt-3.5-turbo", "gpt-3.5-turbo — Leve e rápido 🪶"),
+                ("gpt-4o-mini",   "gpt-4o-mini ” Rápido e econômico ⚡"),
+                ("gpt-4o",        "gpt-4o ” Mais inteligente, multimodal 🧠"),
+                ("gpt-4-turbo",   "gpt-4-turbo ” GPT-4 otimizado 🚀"),
+                ("gpt-3.5-turbo", "gpt-3.5-turbo ” Leve e rápido 🪶"),
             ]
             _oai_model_opts = "".join(
                 f"<option value='{v}' {'selected' if v == oai_current_model else ''}>{html.escape(l)}</option>"
@@ -4028,7 +4067,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                     <div style="display:flex;align-items:flex-end;gap:8px;padding-bottom:2px">
                       <button type="button"
                         onclick="var f=document.getElementById('oai-edit-form');f.style.display=f.style.display==='none'?'block':'none'"
-                        class="btn secondary" style="flex:1;justify-content:center">✏️ Editar</button>
+                        class="btn secondary" style="flex:1;justify-content:center">✏ï¸ Editar</button>
                       <form method="post" action="/app/profiles/{p.id}/integrations/{_oai_integ_id}/delete" style="margin:0;flex:1">
                         <button class="btn secondary" type="submit" style="width:100%;justify-content:center;color:#ef4444"
                           onclick="return confirm('Remover integração ChatGPT?')">
@@ -4041,7 +4080,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                   </div>
                 </div>"""
                 _oai_form_display = "display:none"
-                _oai_form_label = "✏️ Editar chave / modelo"
+                _oai_form_label = "✏ï¸ Editar chave / modelo"
             else:
                 _oai_list = ""
                 _oai_form_display = "display:block"
@@ -4058,7 +4097,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 <div>2. Faça login com sua conta OpenAI</div>
                 <div>3. Clique em <b>Create new secret key</b></div>
                 <div>4. Copie a chave e cole no campo abaixo</div>
-                <div style="margin-top:8px;color:#f59e0b;font-size:12px">⚠️ A API OpenAI requer créditos pagos. Com ChatGPT Plus você tem acesso à API separado — verifique em platform.openai.com/usage.</div>
+                <div style="margin-top:8px;color:#f59e0b;font-size:12px">⚠ï¸ A API OpenAI requer créditos pagos. Com ChatGPT Plus você tem acesso à API separado ” verifique em platform.openai.com/usage.</div>
               </div>
               <form method="post" action="/app/profiles/{p.id}/integrations/openai">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
@@ -4072,7 +4111,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                     <select name="model" style="width:100%;padding:10px 13px;border-radius:9px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:13px;cursor:pointer">
                       {_oai_model_opts}
                     </select>
-                    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Recomendado: <b>gpt-4o-mini</b> — mais barato, suficiente para reescrever posts.</div>
+                    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Recomendado: <b>gpt-4o-mini</b> ” mais barato, suficiente para reescrever posts.</div>
                   </div>
                 </div>
                 <div style="margin-top:20px;display:flex;gap:10px">
@@ -4145,7 +4184,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                     <div style="font-weight:600;font-size:13px;margin-bottom:4px">Cole as informa&#231;&#245;es no formul&#225;rio abaixo</div>
                     <div style="font-size:12px;color:var(--muted);line-height:1.65">
                       Preencha o <b>Page ID</b> (o campo <code style="font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px">id</code>) e o <b>Page Access Token</b> (o campo <code style="font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px">access_token</code>).<br>
-                      Voc&#234; pode adicionar quantas p&#225;ginas quiser — cada uma &#233; configurada de forma independente para este bot.
+                      Voc&#234; pode adicionar quantas p&#225;ginas quiser ” cada uma &#233; configurada de forma independente para este bot.
                     </div>
                   </div>
                 </div>
@@ -4158,7 +4197,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 <svg width='18' height='18' viewBox='0 0 24 24' fill='#1877f2'><path d='M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z'/></svg>
                 Conectar automaticamente via OAuth
               </div>
-              <div style="font-size:12px;color:var(--muted);margin-bottom:16px">Configure o App ID e Secret do seu app Meta uma vez — depois basta clicar em Conectar para importar todas as suas páginas automaticamente.</div>
+              <div style="font-size:12px;color:var(--muted);margin-bottom:16px">Configure o App ID e Secret do seu app Meta uma vez ” depois basta clicar em Conectar para importar todas as suas páginas automaticamente.</div>
               <form method="post" action="/app/profiles/{p.id}/integrations/facebook/oauth-config" style="margin-bottom:14px">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
                   <div>
@@ -4230,7 +4269,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 <tbody>{fb_rows}</tbody>
               </table>
             </div>"""
-        else:  # conexoes — per-bot view across all profiles
+        else:  # conexoes ” per-bot view across all profiles
             _all_conn_profiles = list(db.scalars(select(AutomationProfile).where(AutomationProfile.user_id == user.id).order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())))
             _conn_sections = ""
             for _cp in _all_conn_profiles:
@@ -4247,12 +4286,12 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                     except Exception:
                         _ci_creds = {}
                     if _ci.type == IntegrationType.WORDPRESS:
-                        _ci_url = str(_ci_creds.get("base_url") or "—")
+                        _ci_url = str(_ci_creds.get("base_url") or "”")
                     elif _ci.type == IntegrationType.FACEBOOK:
                         _ci_pages = _ci_creds.get("pages") or []
-                        _ci_url = f"{len(_ci_pages)} p&#225;gina(s)" if _ci_pages else "—"
+                        _ci_url = f"{len(_ci_pages)} p&#225;gina(s)" if _ci_pages else "”"
                     elif _ci.type == IntegrationType.GEMINI:
-                        _ci_url = str(_ci_creds.get("model") or "—")
+                        _ci_url = str(_ci_creds.get("model") or "”")
                     else:
                         _ci_url = html.escape(_ci.name)
                     _ci_connected = _ci.status.value == "CONNECTED"
@@ -4507,7 +4546,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 _title_raw = str((_outs.get("recipe") or {}).get("title") or "").strip()
                 if not _title_raw and _sc:
                     _title_raw = str(_sc.title or "").strip()
-                _title_disp = html.escape(_title_raw[:60]) if _title_raw else f"Post {_idx+1} — t&#237;tulo pendente"
+                _title_disp = html.escape(_title_raw[:60]) if _title_raw else f"Post {_idx+1} ” t&#237;tulo pendente"
                 _run_at = _sj.run_at or _now_local
                 _run_local = _to_user_local(_run_at, user=user) or _now_local
                 _date_str = _run_local.strftime("%d/%m/%Y")
@@ -4627,7 +4666,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                   font-size:10px;font-weight:700;color:rgba(139,92,246,.7)">{_i+1}</span>
               </td>
               <td style="{_tbl_td};color:var(--muted);font-style:italic">
-                Post {_i+1} — t&#237;tulo gerado ao ativar
+                Post {_i+1} ” t&#237;tulo gerado ao ativar
               </td>
               <td style="{_tbl_td};color:var(--muted);white-space:nowrap">{_date_str}</td>
               <td style="{_tbl_td};font-weight:700;white-space:nowrap">{_time_str}</td>
@@ -4850,20 +4889,22 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
 
         <!-- ── Diagnostic modal ───────────────────────────────── -->
         <div class="diag-overlay" id="schedDiagOverlay" onclick="if(event.target===this)closeSchedDiag()">
-          <div class="diag-modal" style="padding:22px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+          <div class="diag-modal">
+            <div class="diag-header">
               <div>
                 <div style="font-weight:700;font-size:17px">Diagn&#243;stico antes de ativar</div>
                 <div id="schedDiagBotName" style="font-size:12px;color:var(--muted);margin-top:2px"></div>
               </div>
-              <button onclick="closeSchedDiag()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
+              <button class="diag-close" type="button" onclick="closeSchedDiag()">&times;</button>
             </div>
+            <div class="diag-body">
             <div id="schedDiagItems" style="display:flex;flex-direction:column;gap:10px;min-height:80px">
               <div style="text-align:center;padding:32px;color:var(--muted)">
                 <div style="font-size:28px;margin-bottom:8px">&#9203;</div>Verificando...
               </div>
             </div>
-            <div id="schedDiagFooter" style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end"></div>
+            </div>
+            <div id="schedDiagFooter" class="diag-footer"></div>
           </div>
         </div>
         <form id="schedActivateForm" method="post" action="/app/profiles/{p.id}/schedule/activate" style="display:none">
@@ -5037,37 +5078,18 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
               var icons = {{ok:'&#9989;',warn:'&#9888;&#65039;',err:'&#10060;'}};
               var out = '';
               (data.results||[]).forEach(function(item) {{
-                out += '<div class="diag-item '+item.status+'" style="border-radius:12px;padding:12px 14px;border:1px solid transparent">';
-                out += '<div style="display:flex;align-items:flex-start;gap:10px">';
-                out += '<span style="font-size:18px;flex-shrink:0;margin-top:1px">'+(icons[item.status]||'&bull;')+'</span>';
-                out += '<div style="flex:1"><div style="font-weight:600;font-size:14px;margin-bottom:3px">'+item.label+'</div>';
-                if (item.desc) out += '<div style="font-size:12px;color:var(--muted);line-height:1.5">'+item.desc+'</div>';
-                if (item.fix) out += '<div style="font-size:12px;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.15);border-radius:7px;line-height:1.5">'+item.fix+'</div>';
-                out += '</div></div></div>';
+                out += phRenderDiagItem(item, icons);
               }});
               var snd = (typeof window._phSoundLabel === 'function') ? window._phSoundLabel() : '&#129534; Caixa';
-              if (data.summary) {{
-                var s = data.summary;
-                var iT = s.interval_minutes > 0 ? s.interval_minutes+' min entre posts' : 'sem intervalo';
-                out += '<div style="margin-top:14px;padding:14px 16px;background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.2);border-radius:12px;font-size:13px">';
-                out += '<div style="font-weight:700;margin-bottom:10px">&#128203; Resumo</div>';
-                out += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px">';
-                out += '<div><span style="color:var(--muted)">Posts:</span> <b>'+s.posts_per_day+'</b></div>';
-                out += '<div><span style="color:var(--muted)">Intervalo:</span> <b>'+iT+'</b></div>';
-                out += '<div><span style="color:var(--muted)">Som:</span> <b>'+snd+'</b></div>';
-                if (s.wp_url) out += '<div style="grid-column:1/-1"><span style="color:var(--muted)">Site:</span> <b>'+s.wp_url+'</b></div>';
-                out += '</div></div>';
-              }}
-              document.getElementById('schedDiagItems').innerHTML = out;
-              var footer = '<button type="button" class="btn secondary" onclick="closeSchedDiag()" style="min-width:80px">Fechar</button>';
-              if (data.can_start) {{
-                footer += '<button type="button" class="btn" onclick="confirmSchedActivate(false)" style="min-width:150px;background:#10b981;border-color:#10b981;color:#fff">&#9654; Ativar agendamento</button>';
-              }} else if (data.can_reconnect_start) {{
-                footer += '<button type="button" class="btn" onclick="confirmSchedActivate(true)" style="min-width:180px;background:#10b981;border-color:#10b981;color:#fff">&#8635; Reconectar e ativar</button>';
-              }} else {{
-                footer += '<button type="button" class="btn" disabled style="min-width:150px;opacity:.4;cursor:not-allowed">&#9654; Ativar agendamento</button>';
-              }}
-              document.getElementById('schedDiagFooter').innerHTML = footer;
+              document.getElementById('schedDiagItems').innerHTML = (out || '<div style="padding:20px;text-align:center;color:var(--muted)">Nenhum resultado.</div>') + phRenderDiagSummary(data.summary, snd, 'Site');
+              document.getElementById('schedDiagFooter').innerHTML = phRenderDiagFooter(
+                'closeSchedDiag',
+                'confirmSchedActivate',
+                !!data.can_start,
+                !!data.can_reconnect_start,
+                'Ativar agendamento',
+                'Reconectar e ativar'
+              );
             }})
             .catch(function(err) {{
               document.getElementById('schedDiagItems').innerHTML = '<div style="text-align:center;padding:24px;color:#ef4444">&#10060; Erro: '+err.message+'</div>';
@@ -5118,7 +5140,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
         <div style="display:flex;align-items:flex-start;gap:10px;padding:12px 16px;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:12px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.6">
           <span style="font-size:18px;flex-shrink:0">&#9889;</span>
           <div>O <b>prompt da IA</b> define como o conte&#250;do ser&#225; reescrito para cada destino.
-          Escreva instru&#231;&#245;es claras — tom de voz, formato, tamanho, hashtags, etc.
+          Escreva instru&#231;&#245;es claras ” tom de voz, formato, tamanho, hashtags, etc.
           Cada bot tem seu pr&#243;prio conjunto de prompts independente.</div>
         </div>
         """
@@ -5211,7 +5233,7 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                             <option value="random" {_ip_smode_sel["random"]}>&#127922; Aleat&#243;rio</option>
                           </select>
                         </div>
-                        <div style="margin-top:6px;font-size:11px;color:var(--muted)">Dica: cada prompt pode ter um estilo diferente — o bot usa o selecionado (ou sorteia no Aleat&#243;rio).</div>
+                        <div style="margin-top:6px;font-size:11px;color:var(--muted)">Dica: cada prompt pode ter um estilo diferente ” o bot usa o selecionado (ou sorteia no Aleat&#243;rio).</div>
                       </div>
                       <!-- Facebook prompt -->
                       <div class="card" style="padding:20px;border-top:3px solid #1877f2;display:flex;flex-direction:column;height:100%;box-sizing:border-box;margin-top:0">
@@ -5890,7 +5912,7 @@ def profile_wp_integration_create(
     apwd = app_password.strip()
 
     if existing:
-        # Atualiza integração existente — adiciona ou atualiza o usuário na lista
+        # Atualiza integração existente ” adiciona ou atualiza o usuário na lista
         try:
             creds = decrypt_json(existing.credentials_encrypted)
         except CryptoError:
@@ -7009,7 +7031,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             )
         ) or 0)
     # Script de persistência de toggles (sempre presente nesta página)
-    # Técnica: servidor NÃO renderiza open/closed — JS lê localStorage ou data-default-open
+    # Técnica: servidor NÃO renderiza open/closed ” JS lê localStorage ou data-default-open
     # Isso garante que nunca há flash de "abre e fecha" no auto-reload de 5s
     refresh_js = """<script>
 (function(){
@@ -7077,7 +7099,7 @@ def history_page(
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Histórico completo de publicações — todos os bots, separados por seção."""
+    """Histórico completo de publicações ” todos os bots, separados por seção."""
     all_profiles = list(db.scalars(
         select(AutomationProfile)
         .where(AutomationProfile.user_id == user.id)
@@ -7097,9 +7119,9 @@ def history_page(
             dt_iso = (p_obj.published_at or p_obj.created_at).isoformat() if (p_obj.published_at or p_obj.created_at) else ""
             chk = f"<input type='checkbox' name='post_id' value='{html.escape(p_obj.id)}' style='width:14px;height:14px;cursor:pointer' onchange=\"_phHistCount('{html.escape(pr_id)}')\"/>"
             wp_link = (f"<a href='{html.escape(p_obj.wp_url)}' target='_blank' rel='noopener' "
-                       f"style='color:#10b981;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap'>&#8599; Ver</a>") if p_obj.wp_url else "<span style='color:var(--muted)'>—</span>"
+                       f"style='color:#10b981;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap'>&#8599; Ver</a>") if p_obj.wp_url else "<span style='color:var(--muted)'>”</span>"
             src_link = (f"<a href='{html.escape(str(canonical_url))}' target='_blank' rel='noopener' "
-                        f"style='color:#6366f1;font-size:12px;text-decoration:none;white-space:nowrap' title='{html.escape(str(canonical_url))}'>&#8599; Fonte</a>") if canonical_url else "<span style='color:var(--muted)'>—</span>"
+                        f"style='color:#6366f1;font-size:12px;text-decoration:none;white-space:nowrap' title='{html.escape(str(canonical_url))}'>&#8599; Fonte</a>") if canonical_url else "<span style='color:var(--muted)'>”</span>"
             _correct_url = html.escape(f"/app/profiles/{pr_id}/posts/{p_obj.id}/correct")
             correct_btn = (
                 f"<button type='button' class='btn flat' "
@@ -7598,7 +7620,7 @@ def _translate_error(code: str) -> tuple[str, str, str]:
         )
     if "duplicate_detected" in c:
         return (
-            "Post duplicado — ignorado automaticamente",
+            "Post duplicado ” ignorado automaticamente",
             "Um post com título ou URL muito similar já foi publicado. O sistema buscará novo conteúdo automaticamente.",
             "",
         )
