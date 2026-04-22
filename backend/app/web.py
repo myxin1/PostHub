@@ -2588,8 +2588,13 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
                              "fix": f"Vá em <a href='/app/profiles/{bot.id}?tab=integracoes'>Integrações → WordPress</a> e adicione o App Password."})
         else:
             wp_can_reconnect = True
-            wp_test = _try_reconnect_wordpress(db, wp_integ, base_url=base_url, active_user=active_user)
-            db.commit()
+            try:
+                wp_test = _try_reconnect_wordpress(db, wp_integ, base_url=base_url, active_user=active_user)
+                db.commit()
+            except Exception as _wpe:
+                import traceback as _tbtmp
+                db.rollback()
+                wp_test = {"ok": False, "retryable": False, "detail": f"Erro interno: {_tbtmp.format_exc()[-300:]}"}
             if wp_test.get("ok"):
                 display_name = wp_test.get("display_name") or active_user["username"]
                 roles = wp_test.get("roles") or []
@@ -2792,36 +2797,45 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
                 "desc": f"Páginas: {', '.join(valid_pages[:3])}{'...' if len(valid_pages)>3 else ''}. Imagem: {img_label}.",
             })
 
-    can_start = all(r["status"] not in ("err",) for r in results)
-    can_reconnect_start = bool(
-        wp_can_reconnect
-        and not can_start
-        and not any(r["status"] == "err" and r["key"] != "wordpress" for r in results)
-    )
-    _scfg = bot.schedule_config_json or {}
-    _ppd  = int(_scfg.get("posts_per_day") or 15)
-    _imin = int(_scfg.get("interval_minutes") or 0)
-    _src_types = list({s.type.value for s in sources}) if sources else []
-    _wp_url_diag = ""
     try:
-        if wp_integ:
-            _wp_url_diag = str(decrypt_json(wp_integ.credentials_encrypted).get("base_url") or "")
-    except Exception:
-        pass
-    summary = {
-        "posts_per_day": _ppd,
-        "interval_minutes": _imin,
-        "sources_count": len(sources),
-        "sources_types": _src_types,
-        "wp_url": _wp_url_diag,
-    }
-    return JSONResponse({
-        "results": results,
-        "can_start": can_start,
-        "can_reconnect_start": can_reconnect_start,
-        "bot_name": bot.name,
-        "summary": summary,
-    })
+        can_start = all(r["status"] not in ("err",) for r in results)
+        can_reconnect_start = bool(
+            wp_can_reconnect
+            and not can_start
+            and not any(r["status"] == "err" and r["key"] != "wordpress" for r in results)
+        )
+        _scfg = bot.schedule_config_json or {}
+        _ppd  = int(_scfg.get("posts_per_day") or 15)
+        _imin = int(_scfg.get("interval_minutes") or 0)
+        _src_types = list({s.type.value for s in sources}) if sources else []
+        _wp_url_diag = ""
+        try:
+            if wp_integ:
+                _wp_url_diag = str(decrypt_json(wp_integ.credentials_encrypted).get("base_url") or "")
+        except Exception:
+            pass
+        summary = {
+            "posts_per_day": _ppd,
+            "interval_minutes": _imin,
+            "sources_count": len(sources),
+            "sources_types": _src_types,
+            "wp_url": _wp_url_diag,
+        }
+        return JSONResponse({
+            "results": results,
+            "can_start": can_start,
+            "can_reconnect_start": can_reconnect_start,
+            "bot_name": bot.name,
+            "summary": summary,
+        })
+    except Exception as _final_e:
+        import traceback as _tb2
+        return JSONResponse({
+            "error": f"diagnose error: {_tb2.format_exc()[-1200:]}",
+            "results": results,
+            "can_start": False,
+            "can_reconnect_start": False,
+        }, status_code=500)
 
 
 @router.post("/app/robot/stop", include_in_schema=False)
