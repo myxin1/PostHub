@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
     async def _startup():
         try:
             Base.metadata.create_all(bind=engine)
-            _sqlite_auto_migrate()
+            _auto_migrate_schema()
             _seed_admin_user()
         except Exception as exc:  # noqa: BLE001
             import traceback
@@ -74,6 +74,26 @@ def create_app() -> FastAPI:
 
             asyncio.create_task(loop())
 
+    @app.get("/api/worker/tick", include_in_schema=False)
+    async def _worker_tick(request: Request):
+        """Endpoint chamado pelo Vercel Cron a cada minuto."""
+        secret = os.getenv("CRON_SECRET", "")
+        if secret and request.headers.get("authorization") != f"Bearer {secret}":
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        import time
+        worker_id = f"cron:{socket.gethostname()}"
+        ticks, deadline = 0, time.monotonic() + 55  # 55s = margem segura pro timeout Vercel
+        while time.monotonic() < deadline:
+            try:
+                did_work = await asyncio.to_thread(run_worker_tick, worker_id=worker_id)
+            except Exception:
+                break
+            if not did_work:
+                break
+            ticks += 1
+        return JSONResponse({"ok": True, "ticks": ticks})
+
     @app.get("/api/setup", include_in_schema=False)
     def _setup():
         """Force DB setup — call once after deploy to create tables and seed admin."""
@@ -85,7 +105,7 @@ def create_app() -> FastAPI:
         except Exception as exc:
             log.append(f"ERR create_all: {exc}")
         try:
-            _sqlite_auto_migrate()
+            _auto_migrate_schema()
             log.append("OK: migrate")
         except Exception as exc:
             log.append(f"ERR migrate: {exc}")
@@ -113,6 +133,14 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def _auto_migrate_schema() -> None:
+    url = str(engine.url)
+    if url.startswith("sqlite"):
+        _sqlite_auto_migrate()
+    elif url.startswith("postgresql"):
+        _postgres_auto_migrate()
 
 
 def _sqlite_auto_migrate() -> None:
@@ -146,6 +174,12 @@ def _sqlite_auto_migrate() -> None:
         prof_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(automation_profiles)")).fetchall()]
         if "publish_config_json" not in prof_cols:
             conn.execute(text("ALTER TABLE automation_profiles ADD COLUMN publish_config_json TEXT NOT NULL DEFAULT '{}'"))
+
+
+def _postgres_auto_migrate() -> None:
+    """Best-effort schema fixes for older Postgres deployments."""
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TYPE integrationtype ADD VALUE IF NOT EXISTS 'OPENAI'"))
 
 
 def _seed_admin_user() -> None:

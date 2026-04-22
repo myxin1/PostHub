@@ -6,6 +6,15 @@
       "use": "@vercel/python"
     }
   ],
+  "crons": [
+    {
+      "path": "/api/worker/tick",
+      "schedule": "* * * * *"
+    }
+  ],
+  "env": {
+    "POSTHUB_INLINE_WORKER": "0"
+  },
   "routes": [
     {
       "src": "/(.*)",
