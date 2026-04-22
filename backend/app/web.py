@@ -225,6 +225,31 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/posthub.css?v=7" />
+  <style>
+    /* ── Mobile crítico inline (nunca cacheia) ── */
+    @media (max-width: 900px) {{
+      .notif-dropdown {{
+        position: fixed !important;
+        top: 62px !important;
+        left: 12px !important;
+        right: 12px !important;
+        width: auto !important;
+        max-height: 72vh !important;
+        max-height: 72dvh !important;
+        border-radius: 16px !important;
+        z-index: 10000 !important;
+      }}
+    }}
+    body.ph-mob-active .notif-dropdown {{
+      position: fixed !important;
+      top: 108px !important;
+      left: 50% !important;
+      right: auto !important;
+      transform: translateX(-50%) !important;
+      width: min(320px, calc(100vw - 40px)) !important;
+      z-index: 200000 !important;
+    }}
+  </style>
   <script>
     (function(){{
       var t = localStorage.getItem('posthub-theme') || 'roxo';

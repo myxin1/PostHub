@@ -3,18 +3,9 @@
   "builds": [
     {
       "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
+      "use": "@vercel/python"
     }
   ],
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 30,
-      "regions": ["gru1"]
-    }
-  },
   "routes": [
     {
       "src": "/(.*)",
@@ -25,7 +16,7 @@
     {
       "source": "/static/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        { "key": "Cache-Control", "value": "public, max-age=3600, s-maxage=0, must-revalidate" }
       ]
     },
     {
