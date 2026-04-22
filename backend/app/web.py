@@ -788,19 +788,28 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         }}, 5000);
       }}
 
+      var _botStreak=0, _botDelay=8000, _botTid=null;
+      function _scheduleBotPoll(){{ _botTid=setTimeout(_pollBotStatus,_botDelay); }}
       function _pollBotStatus() {{
+        if(document.hidden){{ _scheduleBotPoll(); return; }}
         fetch('/app/robot/status')
           .then(function(r){{ return r.ok ? r.json() : []; }})
           .then(function(bots) {{
+            var changed=false;
             (bots || []).forEach(function(b) {{
               var prev = _prevStatus[b.id];
               if (prev === true && !b.is_running) {{
-                // bot just stopped ” show toast and refresh notification bell
                 _showToast('&#9989; ' + b.name + ' parou. Veja as notificações.', 'success');
                 if (typeof window._phFetchFeed === 'function') window._phFetchFeed();
+                changed=true;
               }}
+              if(prev!==b.is_running) changed=true;
               _prevStatus[b.id] = b.is_running;
             }});
+            if(changed){{ _botStreak=0; _botDelay=8000; }}
+            else{{ _botStreak++; if(_botStreak>=3) _botDelay=Math.min(30000,_botDelay+6000); }}
+            var anyRunning=(bots||[]).some(function(b){{return b.is_running;}});
+            if(anyRunning) _scheduleBotPoll();
           }})
           .catch(function(){{}});
       }}
@@ -811,7 +820,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         .then(function(bots) {{
           (bots || []).forEach(function(b) {{ _prevStatus[b.id] = b.is_running; }});
           var anyRunning = (bots || []).some(function(b){{ return b.is_running; }});
-          if (anyRunning) setInterval(_pollBotStatus, 5000);
+          if (anyRunning) _scheduleBotPoll();
         }}).catch(function(){{}});
     }})();
 
@@ -853,14 +862,25 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
           }}).join('');
         }});
       }}
+      var _liveLogJson='', _liveLogStreak=0, _liveLogDelay=5000;
       function _fetchLiveLog() {{
+        if(document.hidden) {{ setTimeout(_fetchLiveLog,_liveLogDelay); return; }}
         fetch('/app/posts/live-jobs')
           .then(function(r){{ return r.ok ? r.json() : []; }})
-          .then(_renderLog).catch(function(){{}});
+          .then(function(rows){{
+            var j=JSON.stringify(rows);
+            if(j!==_liveLogJson){{
+              _liveLogJson=j; _liveLogStreak=0; _liveLogDelay=5000;
+              _renderLog(rows);
+            }} else {{
+              _liveLogStreak++;
+              if(_liveLogStreak>=3) _liveLogDelay=Math.min(20000,_liveLogDelay+5000);
+            }}
+            setTimeout(_fetchLiveLog,_liveLogDelay);
+          }}).catch(function(){{ setTimeout(_fetchLiveLog,_liveLogDelay); }});
       }}
       if (document.querySelector('[id^="livelog-body-"]')) {{
         _fetchLiveLog();
-        setInterval(_fetchLiveLog, 5000);
       }}
     }})();
 
@@ -2871,6 +2891,35 @@ def robot_status(user: User = Depends(get_current_user), db=Depends(get_db)):
         pp = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == p.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
         result.append({"id": p.id, "name": p.name, "is_running": (qj + pp) > 0})
     return _JSONResponse(result)
+
+
+@router.get("/app/posts/status-hash", include_in_schema=False)
+def posts_status_hash(user: User = Depends(get_current_user), db=Depends(get_db)):
+    """Lightweight hash of active job/post state — used by smart polling to avoid unnecessary reloads."""
+    import hashlib
+    profiles = db.scalars(select(AutomationProfile).where(AutomationProfile.user_id == user.id)).all()
+    all_ids = [p.id for p in profiles]
+    if not all_ids:
+        return _JSONResponse({"hash": "empty", "active": 0})
+    active_jobs = int(db.scalar(
+        select(func.count()).select_from(Job).where(
+            Job.profile_id.in_(all_ids),
+            Job.status.in_([JobStatus.queued, JobStatus.running])
+        )
+    ) or 0)
+    active_posts = int(db.scalar(
+        select(func.count()).select_from(Post).where(
+            Post.profile_id.in_(all_ids),
+            Post.status.in_([PostStatus.pending, PostStatus.processing])
+        )
+    ) or 0)
+    # Include the most-recent job update timestamp so the hash changes when a job finishes
+    last_ts = db.scalar(
+        select(func.max(Job.updated_at)).where(Job.profile_id.in_(all_ids))
+    )
+    fingerprint = f"{active_jobs}:{active_posts}:{last_ts}"
+    h = hashlib.md5(fingerprint.encode()).hexdigest()[:12]
+    return _JSONResponse({"hash": h, "active": active_jobs + active_posts})
 
 
 @router.get("/app/posts/live-jobs", include_in_schema=False)
@@ -7121,7 +7170,35 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
 })();
 </script>"""
     if _active_job_count > 0 or _active_post_count > 0:
-        refresh_js += "<script>setTimeout(function(){location.reload();},5000);</script>"
+        refresh_js += """<script>
+(function(){
+  var _hash=null, _streak=0, _delay=8000, _tid=null;
+  function _schedule(){ _tid=setTimeout(_check,_delay); }
+  function _check(){
+    if(document.hidden){ _schedule(); return; }
+    fetch('/app/posts/status-hash')
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(d){
+        if(!d){ _schedule(); return; }
+        if(_hash===null){ _hash=d.hash; _schedule(); return; }
+        if(d.hash!==_hash){
+          // estado mudou — recarrega
+          location.reload();
+        } else {
+          // sem mudança — aumenta intervalo gradualmente (max 30s)
+          _streak++;
+          if(_streak>=3) _delay=Math.min(30000,_delay+6000);
+          _schedule();
+        }
+      })
+      .catch(function(){ _schedule(); });
+  }
+  document.addEventListener('visibilitychange',function(){
+    if(!document.hidden && _hash!==null){ clearTimeout(_tid); _check(); }
+  });
+  _schedule();
+})();
+</script>"""
 
     body = flash_html + _ph("secao-posts") + summary_bar + help_menu + bot_sections + refresh_js
     return _layout("Posts", body, user=user, active_nav="posts")
