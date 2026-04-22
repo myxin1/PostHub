@@ -641,6 +641,10 @@
       .grid2 { grid-template-columns: 1fr; }
       /* topbar: compact */
       .topbar { padding-bottom: 4px; }
+      /* tabelas: scroll horizontal suave no touch */
+      [style*="overflow-x:auto"], [style*="overflow-x: auto"] {
+        -webkit-overflow-scrolling: touch;
+      }
       /* notif dropdown: fixed para escapar overflow:hidden do .app */
       .notif-dropdown {
         position: fixed !important;

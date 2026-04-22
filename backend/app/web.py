@@ -224,7 +224,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/posthub.css?v=7" />
+  <link rel="stylesheet" href="/static/posthub.css?v=8" />
   <style>
     /* ── Mobile crítico inline (nunca cacheia) ── */
     @media (max-width: 900px) {{
@@ -1128,7 +1128,7 @@ def login_page(request: Request):
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/posthub.css?v=7" />
+  <link rel="stylesheet" href="/static/posthub.css?v=8" />
   <style>
     html, body {{
       min-height: 100vh;
@@ -6658,8 +6658,9 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                 f"name='post_id' onchange=\"_phUpdateCount('{tid}')\""
             )
         return (f"<div style='border:1px solid var(--border);border-radius:12px;overflow:hidden'>"
-                f"<table id='{tid}' style='width:100%;border-collapse:collapse'>"
-                f"<thead>{thead}</thead><tbody>{body_rows}</tbody></table></div>"
+                f"<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+                f"<table id='{tid}' style='width:100%;border-collapse:collapse;min-width:520px'>"
+                f"<thead>{thead}</thead><tbody>{body_rows}</tbody></table></div></div>"
                 f"<div id='cnt-{tid}' style='font-size:11px;color:var(--muted);margin-top:5px;min-height:16px'></div>")
 
     # ── Per-bot sections ─────────────────────────────────────────────────────
@@ -7026,8 +7027,8 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
           <span class="ts-arrow">&#9658;</span>
         </summary>
         <div class="ts-body" style="padding:0">
-          <div id="livelog-{pr_id}" style="overflow-x:auto">
-            <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <div id="livelog-{pr_id}" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:480px">
               <thead><tr style="background:var(--surface2)">
                 <th style="padding:8px 12px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px">T\u00edtulo / URL</th>
                 <th style="padding:8px 12px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px">Etapa</th>
@@ -7228,8 +7229,8 @@ def history_page(
     <!-- Table -->
     <form id="hist-form-{pr_id}" method="post" action="/app/profiles/{pr_id}/posts/bulk">
       <input type="hidden" name="mode" value="delete">
-      <div style="overflow-x:auto">
-        <table id="hist-tbl-{pr_id}" style="width:100%;border-collapse:collapse">
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <table id="hist-tbl-{pr_id}" style="width:100%;border-collapse:collapse;min-width:480px">
           <thead><tr style="background:var(--surface2)">
             <th style="{th_s};width:32px"><input type="checkbox" style="width:14px;height:14px;cursor:pointer"
               onclick="var h=this;document.getElementById('hist-tbl-{pr_id}').querySelectorAll('input[name=post_id]').forEach(function(c){{c.checked=h.checked;}});_phHistCount('{pr_id}')"></th>
