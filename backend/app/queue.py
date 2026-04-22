@@ -74,8 +74,29 @@ def schedule_retry(job: Job) -> datetime:
     return datetime.utcnow() + timedelta(seconds=delay_seconds)
 
 
+_STALE_LOCK_MINUTES = 6  # libera locks travados após 6 min (> intervalo do cron)
+
+
 def get_due_job(db, *, worker_id: str) -> Job | None:
     now = datetime.utcnow()
+    stale_cutoff = now - timedelta(minutes=_STALE_LOCK_MINUTES)
+
+    # Libera jobs presos (função morta por timeout antes de terminar)
+    stuck = db.scalars(
+        select(Job).where(
+            Job.status == JobStatus.running,
+            Job.locked_at <= stale_cutoff,
+        )
+    ).all()
+    for j in stuck:
+        j.status = JobStatus.queued
+        j.locked_at = None
+        j.locked_by = None
+        j.updated_at = now
+        db.add(j)
+    if stuck:
+        db.flush()
+
     job = db.scalar(
         select(Job)
         .where(
@@ -86,6 +107,7 @@ def get_due_job(db, *, worker_id: str) -> Job | None:
         )
         .order_by(Job.run_at.asc())
         .limit(1)
+        .with_for_update(skip_locked=True)  # evita dois workers pegarem o mesmo job
     )
     if not job:
         return None

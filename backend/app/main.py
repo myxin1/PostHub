@@ -83,7 +83,7 @@ def create_app() -> FastAPI:
 
         import time
         worker_id = f"cron:{socket.gethostname()}"
-        ticks, deadline = 0, time.monotonic() + 55  # 55s = margem segura pro timeout Vercel
+        ticks, deadline = 0, time.monotonic() + 50  # 50s = margem segura (Vercel Pro = 60s)
         while time.monotonic() < deadline:
             try:
                 did_work = await asyncio.to_thread(run_worker_tick, worker_id=worker_id)
