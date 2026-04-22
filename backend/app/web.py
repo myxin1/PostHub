@@ -22,7 +22,7 @@ def _ph(name: str) -> str:
         f"border-radius:4px;padding:2px 6px;margin:2px 2px;vertical-align:middle'>"
         f"<span class='dev-ph'>📌 {name}</span>"
         f"<button type='button' title='Copiar' onclick=\"navigator.clipboard.writeText('{name}').then(function(){{this.textContent='✓'}}.bind(this))\" "
-        f"style='background:none;border:none;cursor:pointer;padding:0 2px;font-size:10px;color:#f59e0b;line-height:1' class='dev-ph'>â§‰</button>"
+        f"style='background:none;border:none;cursor:pointer;padding:0 2px;font-size:10px;color:#f59e0b;line-height:1' class='dev-ph'>⧉</button>"
         f"<button type='button' title='Ocultar' onclick=\"this.closest('.dev-ph-wrap').style.display='none'\" "
         f"style='background:none;border:none;cursor:pointer;padding:0 2px;font-size:10px;color:#f59e0b;line-height:1' class='dev-ph'>✕</button>"
         f"</span>"
@@ -224,7 +224,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/posthub.css?v=6" />
+  <link rel="stylesheet" href="/static/posthub.css?v=7" />
   <script>
     (function(){{
       var t = localStorage.getItem('posthub-theme') || 'roxo';
@@ -269,7 +269,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
     <main class="main">
       <div class="topbar">
         <div style="display:flex;align-items:center;gap:12px">
-          <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" title="Ocultar/Mostrar barra lateral" onclick="toggleSidebar()">â˜°</button>
+          <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" title="Ocultar/Mostrar barra lateral" onclick="toggleSidebar()">☰</button>
           <h2 class="title">{t}</h2>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -1103,7 +1103,7 @@ def login_page(request: Request):
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/posthub.css?v=6" />
+  <link rel="stylesheet" href="/static/posthub.css?v=7" />
   <style>
     html, body {{
       min-height: 100vh;
