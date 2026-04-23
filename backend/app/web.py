@@ -769,6 +769,66 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       if (el) el.textContent = n > 0 ? n + ' selecionado(s)' : '';
     }};
 
+    window.phRunBotNow = function(btn) {{
+      if (!btn || btn.disabled) return;
+      var botId = btn.getAttribute('data-bot-id') || '';
+      btn.disabled = true;
+      var orig = btn.innerHTML;
+      btn.innerHTML = '&#8987; Processando...';
+      btn.style.opacity = '0.7';
+      var fd = new FormData();
+      if (botId) fd.append('bot_id', botId);
+      fetch('/app/robot/tick-now', {{method:'POST', body:fd, credentials:'same-origin'}})
+        .then(function(r){{ return r.ok ? r.json() : {{ticks:0}}; }})
+        .then(function(d){{
+          btn.innerHTML = d.ticks > 0 ? ('&#10003; ' + d.ticks + ' job(s) processado(s)') : '&#10003; Sem jobs na fila';
+          btn.style.opacity = '1';
+          setTimeout(function(){{ location.reload(); }}, 1200);
+        }})
+        .catch(function(){{
+          btn.disabled = false;
+          btn.innerHTML = orig;
+          btn.style.opacity = '1';
+        }});
+    }};
+
+    window.phStopBot = function(btn) {{
+      if (!btn || btn.disabled) return;
+      var botId = btn.getAttribute('data-bot-id') || '';
+      btn.disabled = true;
+      var orig = btn.innerHTML;
+      btn.innerHTML = '&#8987; Parando...';
+      btn.style.opacity = '0.7';
+      var fd = new FormData();
+      if (botId) fd.append('bot_id', botId);
+      fetch('/app/robot/stop', {{method:'POST', body:fd, credentials:'same-origin', headers:{{Accept:'application/json'}}}})
+        .then(function(r){{ return r.ok ? r.json() : {{ok:false}}; }})
+        .then(function(d){{
+          btn.innerHTML = d.ok ? '&#10003; Bot parado' : '&#10007; Erro ao parar';
+          btn.style.opacity = '1';
+          setTimeout(function(){{ location.reload(); }}, 900);
+        }})
+        .catch(function(){{
+          btn.disabled = false;
+          btn.innerHTML = orig;
+          btn.style.opacity = '1';
+        }});
+    }};
+
+    document.addEventListener('click', function(e) {{
+      var runBtn = e.target.closest('.ph-run-now-btn');
+      if (runBtn) {{
+        e.preventDefault();
+        window.phRunBotNow(runBtn);
+        return;
+      }}
+      var stopBtn = e.target.closest('.ph-stop-bot-btn');
+      if (stopBtn) {{
+        e.preventDefault();
+        window.phStopBot(stopBtn);
+      }}
+    }});
+
     // ── Bot status polling + toast notifications ────────────────────────────
     (function() {{
       var _prevStatus = {{}};
@@ -6727,6 +6787,12 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         .where(AutomationProfile.user_id == user.id)
         .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
     ))
+    revived = 0
+    for profile in all_profiles:
+        if profile.active:
+            revived += _revive_profile_queue(db, profile_id=profile.id)
+    if revived:
+        db.commit()
     collect_plan_by_profile = {p.id: _active_collect_plan(db, profile_id=p.id) for p in all_profiles}
 
     # ── Global totals ────────────────────────────────────────────────────────
