@@ -177,6 +177,16 @@ def _ensure_publish_config_defaults(db, *, bot: AutomationProfile) -> bool:
     return changed
 
 
+def _set_bot_run_stopped(db, *, bot: AutomationProfile, stopped: bool) -> None:
+    cfg = dict(bot.publish_config_json or {})
+    if stopped:
+        cfg["run_stopped_at"] = datetime.utcnow().isoformat()
+    else:
+        cfg.pop("run_stopped_at", None)
+    bot.publish_config_json = cfg
+    db.add(bot)
+
+
 def _get_profile_for_user(db, *, profile_id: str, user: User) -> AutomationProfile | None:
     if user.role == UserRole.ADMIN:
         return db.scalar(select(AutomationProfile).where(AutomationProfile.id == profile_id))
@@ -2593,7 +2603,7 @@ def robot_start(
 
     bot.active = True
     _ensure_publish_config_defaults(db, bot=bot)
-    db.add(bot)
+    _set_bot_run_stopped(db, bot=bot, stopped=False)
     revived = _revive_profile_queue(db, profile_id=bot.id)
     queued_jobs = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued)) or 0)
     running_jobs = int(db.scalar(select(func.count()).select_from(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.running)) or 0)
@@ -2925,8 +2935,7 @@ def robot_stop(request: Request, bot_id: str = Form(default=None), user: User = 
         if _is_ajax:
             return _JSONResponse({"ok": False, "error": "bot_not_found"}, status_code=404)
         return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
-    bot.active = False
-    db.add(bot)
+    _set_bot_run_stopped(db, bot=bot, stopped=True)
     ids = list(db.scalars(select(Post.id).where(
         Post.profile_id == bot.id,
         Post.status.in_([PostStatus.pending, PostStatus.processing]),
@@ -2945,7 +2954,7 @@ def robot_stop(request: Request, bot_id: str = Form(default=None), user: User = 
     db.commit()
     _is_ajax = "application/json" in request.headers.get("accept", "")
     if _is_ajax:
-        return _JSONResponse({"ok": True, "active": False, "cancelled_jobs": cancelled_jobs, "cancelled_posts": len(ids)})
+        return _JSONResponse({"ok": True, "active": True, "stopped": True, "cancelled_jobs": cancelled_jobs, "cancelled_posts": len(ids)})
     return RedirectResponse(f"/app/robot?msg={quote_plus('Robô parado com sucesso.')}", status_code=status.HTTP_302_FOUND)
 
 
@@ -3128,7 +3137,7 @@ async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(
 
     if bot:
         bot.active = True
-        db.add(bot)
+        _set_bot_run_stopped(db, bot=bot, stopped=False)
         now = datetime.utcnow()
         # 1. Libera jobs queued com run_at no futuro
         db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
@@ -5612,7 +5621,7 @@ def profile_schedule_activate(
     # Check no active queue
     p.active = True
     _ensure_publish_config_defaults(db, bot=p)
-    db.add(p)
+    _set_bot_run_stopped(db, bot=p, stopped=False)
     revived = _revive_profile_queue(db, profile_id=p.id)
     _active = int(db.scalar(
         select(func.count()).select_from(Job).where(
@@ -6094,6 +6103,8 @@ def profile_run(profile_id: str, user: User = Depends(get_current_user), db=Depe
     p = _get_profile_for_user(db, profile_id=profile_id, user=user)
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    p.active = True
+    _set_bot_run_stopped(db, bot=p, stopped=False)
     enqueue_job(db, user_id=p.user_id, profile_id=p.id, job_type=JOB_COLLECT, payload={})
     db.commit()
     return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)

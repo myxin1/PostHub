@@ -93,7 +93,8 @@ def _is_profile_active(db, profile_id: str | None, user_id: str) -> bool:
     if not profile_id:
         return True
     profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == profile_id, AutomationProfile.user_id == user_id))
-    return bool(profile and profile.active)
+    cfg = dict((profile.publish_config_json if profile else {}) or {})
+    return bool(profile and profile.active and not cfg.get("run_stopped_at"))
 
 
 def _mark_job_skipped_for_inactive_profile(db, job: Job) -> None:
@@ -123,7 +124,8 @@ def _handle_collect(db, job: Job):
     if not profile_id:
         raise ValueError("missing_profile_id")
     profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == profile_id, AutomationProfile.user_id == job.user_id))
-    if not profile or not profile.active:
+    profile_cfg = dict((profile.publish_config_json if profile else {}) or {})
+    if not profile or not profile.active or profile_cfg.get("run_stopped_at"):
         log_event(db, user_id=job.user_id, profile_id=profile_id, stage=JOB_COLLECT, status="skipped", message="profile_inactive_or_missing")
         return
     sources = list(db.scalars(select(Source).where(Source.profile_id == profile_id, Source.active.is_(True))))
@@ -155,7 +157,8 @@ def _handle_collect(db, job: Job):
             db.refresh(profile)
         except Exception:
             pass
-        if not profile.active:
+        profile_cfg = dict(profile.publish_config_json or {})
+        if not profile.active or profile_cfg.get("run_stopped_at"):
             return
         fp = _fingerprint(user_id=job.user_id, canonical_url=s.canonical_url)
         content = CollectedContent(
@@ -281,7 +284,8 @@ def _handle_collect(db, job: Job):
         db.refresh(profile)
     except Exception:
         pass
-    if profile.active and limit and created < limit:
+    profile_cfg = dict(profile.publish_config_json or {})
+    if profile.active and not profile_cfg.get("run_stopped_at") and limit and created < limit:
         round_n = int(job.payload_json.get("collect_round") or 0)
         if round_n < 2:
             enqueue_job(
