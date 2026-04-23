@@ -3028,25 +3028,59 @@ def robot_run_now(bot_id: str = Form(default=None), user: User = Depends(get_cur
 
 @router.post("/app/robot/tick-now", include_in_schema=False)
 async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
-    """Prepara a fila e processa jobs imediatamente (até 55s). Chamado via AJAX."""
+    """Prepara a fila, recupera órfãos e processa jobs imediatamente (até 55s). Chamado via AJAX."""
     import asyncio as _asyncio
     import time as _time
     from app.worker import run_worker_tick as _run_tick
+    from app.queue import JOB_CLEAN as _JOB_CLEAN, JOB_AI as _JOB_AI, JOB_MEDIA as _JOB_MEDIA, JOB_PUBLISH_WP as _JOB_PUBLISH_WP
 
-    # Mesma lógica do run-now: prepara a fila primeiro
     if bot_id:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
     else:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.user_id == user.id).limit(1))
+
     if bot:
         now = datetime.utcnow()
+        # 1. Libera jobs queued com run_at no futuro
         db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
+        # 2. Reseta jobs running travados há mais de 5 min
         stuck_cutoff = now - timedelta(minutes=5)
         db.execute(
             update(Job).where(
                 Job.profile_id == bot.id, Job.status == JobStatus.running, Job.locked_at < stuck_cutoff
             ).values(status=JobStatus.queued, run_at=now, locked_at=None, locked_by=None)
         )
+        # 3. Recupera posts órfãos: pending/processing sem nenhum job ativo
+        pipeline = [_JOB_CLEAN, _JOB_AI, _JOB_MEDIA, _JOB_PUBLISH_WP]
+        orphan_posts = list(db.scalars(
+            select(Post).where(
+                Post.profile_id == bot.id,
+                Post.status.in_([PostStatus.pending, PostStatus.processing]),
+            )
+        ))
+        for p in orphan_posts:
+            active = int(db.scalar(
+                select(func.count()).select_from(Job).where(
+                    Job.post_id == p.id,
+                    Job.status.in_([JobStatus.queued, JobStatus.running]),
+                )
+            ) or 0)
+            if active:
+                continue
+            last_ok_type = db.scalar(
+                select(Job.type).where(Job.post_id == p.id, Job.status == JobStatus.succeeded)
+                .order_by(Job.updated_at.desc()).limit(1)
+            )
+            if last_ok_type in pipeline:
+                idx = pipeline.index(last_ok_type)
+                next_job = pipeline[idx + 1] if idx + 1 < len(pipeline) else _JOB_PUBLISH_WP
+            else:
+                next_job = _JOB_CLEAN
+            p.status = PostStatus.pending
+            p.updated_at = now
+            db.add(p)
+            enqueue_job(db, user_id=p.user_id, profile_id=p.profile_id, post_id=p.id,
+                        job_type=next_job, payload={"collected_content_id": p.collected_content_id})
         db.commit()
 
     # Processa jobs em loop por até 55s
