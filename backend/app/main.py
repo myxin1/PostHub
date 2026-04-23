@@ -98,26 +98,34 @@ def create_app() -> FastAPI:
 
     @app.get("/api/debug/jobs", include_in_schema=False)
     def _debug_jobs(request: Request):
-        """Mostra últimos jobs com erros — protegido por CRON_SECRET."""
+        """Diagnóstico completo: jobs + posts — protegido por CRON_SECRET."""
         from fastapi.responses import PlainTextResponse
         from app.db import db_session
-        from app.models import Job
-        from sqlalchemy import select, desc
+        from app.models import Job, Post, PostStatus
+        from sqlalchemy import select, desc, func as _func
         secret = os.getenv("CRON_SECRET", "")
         if secret and request.headers.get("authorization") != f"Bearer {secret}":
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         lines = []
         with db_session() as db:
-            jobs = db.scalars(
-                select(Job).order_by(desc(Job.updated_at)).limit(30)
-            ).all()
-            for j in jobs:
+            # Contagem de posts por status
+            for st in PostStatus:
+                cnt = db.scalar(select(_func.count()).select_from(Post).where(Post.status == st)) or 0
+                lines.append(f"[posts] {st.value}: {cnt}")
+            lines.append("")
+            # Jobs por tipo+status
+            from sqlalchemy import text as _text
+            rows = db.execute(_text(
+                "SELECT type, status, COUNT(*) as n FROM jobs GROUP BY type, status ORDER BY type, status"
+            )).fetchall()
+            for r in rows:
+                lines.append(f"[jobs] {r[0]:<22} | {r[1]:<10} | n={r[2]}")
+            lines.append("")
+            # Últimos 20 jobs com erro ou não-succeeded
+            for j in db.scalars(select(Job).where(Job.status != 'succeeded').order_by(desc(Job.updated_at)).limit(20)).all():
                 err = str(j.last_error or "").strip()[:120]
-                lines.append(
-                    f"{str(j.updated_at)[:19]} | {j.type:<20} | {j.status.value:<10} | "
-                    f"att={j.attempts}/{j.max_attempts} | {err}"
-                )
-        return PlainTextResponse("\n".join(lines) or "no jobs found")
+                lines.append(f"{str(j.updated_at)[:19]} | {j.type:<20} | {j.status.value:<10} | att={j.attempts}/{j.max_attempts} | {err}")
+        return PlainTextResponse("\n".join(lines) or "no data")
 
     @app.get("/api/setup", include_in_schema=False)
     def _setup():
