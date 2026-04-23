@@ -2140,7 +2140,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
         )
         _pub_alert = ""
         if _any_running:
-            _pub_alert = “<div class='publishing-alert'><span class='pal-dot'></span>&#9889; Bot publicando agora</div>”
+            _pub_alert = "<div class='publishing-alert'><span class='pal-dot'></span>&#9889; Bot publicando agora</div>"
 
         _active_banner = f"""
     <div class="active-project-banner" style="margin-bottom:14px;flex-direction:column;align-items:stretch;gap:10px">
