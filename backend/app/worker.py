@@ -37,7 +37,7 @@ from app.services.facebook import FacebookError, comment_on_post, publish_page_p
 from app.services.gemini import GeminiError, generate_text as gemini_generate_text
 from app.services.openai_service import OpenAIError, generate_text as openai_generate_text
 from app.services.images import download_and_prepare_image
-from app.services.rss import fetch_rss_items, keyword_to_google_news_rss
+from app.services.rss import fetch_rss_items, fetch_site_feed_items, keyword_to_google_news_rss
 from app.services.scrape import discover_recipe_links, is_probably_homepage, looks_like_recipe_page, scrape_url
 from app.services.wordpress import WordPressError, create_post, delete_post, get_or_create_tag_id, list_categories, upload_media
 
@@ -138,6 +138,12 @@ def _handle_collect(db, job: Job):
     # interval_minutes always applied when set; respect_schedule only gates start_at_utc
     interval_minutes = int(payload.get("interval_minutes") or default_interval)
     schedule_index_start = int(payload.get("schedule_index_start") or 0)
+    fast_publish_enabled = bool(profile_cfg.get("fast_publish_enabled"))
+    try:
+        rss_fallback_after_seconds = int(profile_cfg.get("rss_fallback_after_seconds") or 20)
+    except Exception:
+        rss_fallback_after_seconds = 20
+    rss_fallback_after_seconds = max(5, min(rss_fallback_after_seconds, 180))
     created = 0
     skipped_duplicate = 0
     skipped_non_recipe = 0
@@ -212,6 +218,41 @@ def _handle_collect(db, job: Job):
         )
         created += 1
 
+    def _collect_from_site_rss(*, site_url: str, raw_html: str | None, source_id: str) -> int:
+        nonlocal skipped_error, skipped_non_recipe
+        try:
+            feed_url, items = fetch_site_feed_items(site_url=site_url, raw_html=raw_html, limit=50)
+        except Exception:
+            return 0
+        if not items:
+            return 0
+        random.shuffle(items)
+        before = created
+        for item in items:
+            if limit and created >= limit:
+                break
+            try:
+                s = scrape_url(item.url)
+            except Exception:
+                skipped_error += 1
+                continue
+            if not looks_like_recipe_page(url=s.canonical_url, extracted_text=s.extracted_text, raw_html=s.raw_html):
+                skipped_non_recipe += 1
+                continue
+            _enqueue_scraped(s=s, source_id=source_id, title_fallback=item.title)
+        found = created - before
+        if found > 0 and feed_url:
+            log_event(
+                db,
+                user_id=job.user_id,
+                profile_id=profile_id,
+                stage=JOB_COLLECT,
+                status="info",
+                message="rss_fallback_used",
+                meta={"source_id": source_id, "feed_url": feed_url, "created": found},
+            )
+        return found
+
     for source in sources:
         if limit and created >= limit:
             break
@@ -249,6 +290,7 @@ def _handle_collect(db, job: Job):
         elif source.type == SourceType.URL:
             if limit and created >= limit:
                 break
+            source_started_at = time.perf_counter()
             try:
                 scraped = scrape_url(source.value)
             except Exception:
@@ -260,6 +302,16 @@ def _handle_collect(db, job: Job):
                 _enqueue_scraped(s=scraped, source_id=source.id, title_fallback=None)
                 continue
 
+            rss_used = False
+            if fast_publish_enabled and (time.perf_counter() - source_started_at) >= rss_fallback_after_seconds:
+                rss_used = _collect_from_site_rss(
+                    site_url=scraped.canonical_url or source.value,
+                    raw_html=scraped.raw_html,
+                    source_id=source.id,
+                ) > 0
+                if rss_used and (not limit or created >= limit):
+                    continue
+
             picked_links = discover_recipe_links(raw_html=scraped.raw_html, base_url=scraped.canonical_url, max_links=220)
             if picked_links:
                 random.shuffle(picked_links)
@@ -268,6 +320,14 @@ def _handle_collect(db, job: Job):
             for u in picked_links:
                 if limit and created >= limit:
                     break
+                if fast_publish_enabled and not rss_used and (time.perf_counter() - source_started_at) >= rss_fallback_after_seconds:
+                    rss_used = _collect_from_site_rss(
+                        site_url=scraped.canonical_url or source.value,
+                        raw_html=scraped.raw_html,
+                        source_id=source.id,
+                    ) > 0
+                    if limit and created >= limit:
+                        break
                 if attempts >= max_attempts:
                     break
                 attempts += 1
@@ -280,6 +340,12 @@ def _handle_collect(db, job: Job):
                     skipped_non_recipe += 1
                     continue
                 _enqueue_scraped(s=s2, source_id=source.id, title_fallback=None)
+            if fast_publish_enabled and not rss_used and (not picked_links or not limit or created < limit):
+                _collect_from_site_rss(
+                    site_url=scraped.canonical_url or source.value,
+                    raw_html=scraped.raw_html,
+                    source_id=source.id,
+                )
     log_event(
         db,
         user_id=job.user_id,
@@ -360,6 +426,17 @@ def _resolve_prompt(prompt_text: str) -> str:
         return text
 
 
+def _build_fast_site_prompt(site_instr: str) -> str:
+    return (
+        f"{site_instr}\n\n"
+        "Modo rapido ativado.\n"
+        "Mantenha a mesma estrutura editorial, mas entregue uma versao objetiva para publicar mais rapido.\n"
+        "Use titulo, introducao curta, ## Ingredientes, ## Modo de Preparo e ## Dicas.\n"
+        "Evite paragrafos longos, contexto excessivo e repeticao.\n"
+        "Foque em clareza, completude e leitura agil."
+    )
+
+
 def _get_output_image_url(outputs: dict | None, *, fallback_url: str | None = None) -> str:
     """Return the best image URL stored in outputs, tolerating old and new shapes."""
     data = outputs if isinstance(outputs, dict) else {}
@@ -410,6 +487,7 @@ def _handle_ai(db, job: Job):
                 except Exception:
                     openai_key = None
         publish_cfg = dict((profile.publish_config_json if profile else {}) or {})
+        fast_publish_enabled = bool(publish_cfg.get("fast_publish_enabled"))
         allowed_categories = list(publish_cfg.get("categories") or [])
         if not allowed_categories:
             allowed_categories = ["Receitas"]
@@ -469,6 +547,12 @@ def _handle_ai(db, job: Job):
             fb_instr = (
                 "Crie um texto curto e chamativo para Facebook sobre a receita abaixo, com emojis moderados e CTA. "
                 "Finalize com: 👉 veja o modo de preparo nos comentários"
+            )
+        if fast_publish_enabled:
+            site_instr = _build_fast_site_prompt(site_instr)
+            fb_instr = (
+                f"{fb_instr}\n"
+                "Modo rapido ativado. Use um texto curto, direto, com no maximo 3 frases antes do CTA."
             )
         prompt = (
             "Você é um especialista em reescrita de receitas. Reescreva SEM copiar o texto original.\n"
@@ -741,11 +825,15 @@ def _handle_publish_wp(db, job: Job):
     creds = _get_wordpress_integration(db, user_id=job.user_id, profile_id=job.profile_id)
     category_ids: list[int] | None = None
     tag_ids: list[int] | None = None
+    skip_wp_image = False
+    skip_wp_tags = False
     if isinstance(recipe, dict):
         profile = None
         if job.profile_id:
             profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == job.profile_id))
         publish_cfg = dict((profile.publish_config_json if profile else {}) or {})
+        skip_wp_image = bool(publish_cfg.get("fast_skip_wp_image"))
+        skip_wp_tags = bool(publish_cfg.get("fast_skip_wp_tags"))
         allowed_categories = list(publish_cfg.get("categories") or [])
         default_category = str(publish_cfg.get("default_category") or (allowed_categories[0] if allowed_categories else "Receitas"))
         category_name = str(recipe.get("categoria") or "").strip()
@@ -763,7 +851,7 @@ def _handle_publish_wp(db, job: Job):
                 s = str(t).strip()
                 if s:
                     names.append(s)
-        if names:
+        if names and not skip_wp_tags:
             try:
                 tag_ids = [get_or_create_tag_id(base_url=creds["base_url"], username=creds["username"], app_password=creds["app_password"], tag_name=n) for n in names[:12]]
             except WordPressError as _tag_err:
@@ -774,7 +862,7 @@ def _handle_publish_wp(db, job: Job):
                 tag_ids = None
     featured_media_id = None
     image_url = _get_output_image_url(outputs, fallback_url=content.lead_image_url)
-    if image_url:
+    if image_url and not skip_wp_image:
         prepared = download_and_prepare_image(str(image_url))
         featured_media_id = upload_media(
             base_url=creds["base_url"],

@@ -474,7 +474,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
 
       /* ── Prompt variant tabs ── */
       window.phSwitchTab = function(iid, dest, num) {{
-        for (var i = 1; i <= 3; i++) {{
+        for (var i = 1; i <= 4; i++) {{
           var panel = document.getElementById('s' + dest + '_' + iid + '_' + i);
           var btn   = document.getElementById('s' + dest + 'tab_' + iid + '_' + i);
           if (!panel || !btn) continue;
@@ -1368,8 +1368,8 @@ def _get_or_create_single_bot(db, *, user: User) -> AutomationProfile:
     return bot
 
 
-def _parse_prompt_variants(prompt_text: str) -> tuple[str, str, str, str]:
-    """Parse prompt_text into (v1, v2, v3, mode). Handles plain string (legacy) and JSON."""
+def _parse_prompt_variants(prompt_text: str) -> tuple[str, str, str, str, str]:
+    """Parse prompt_text into (v1, v2, v3, v4, mode). Handles plain string (legacy) and JSON."""
     text = (prompt_text or "").strip()
     if text.startswith("{"):
         try:
@@ -1379,10 +1379,11 @@ def _parse_prompt_variants(prompt_text: str) -> tuple[str, str, str, str]:
             v1 = str(variants[0]).strip() if len(variants) > 0 else ""
             v2 = str(variants[1]).strip() if len(variants) > 1 else ""
             v3 = str(variants[2]).strip() if len(variants) > 2 else ""
-            return v1, v2, v3, mode
+            v4 = str(variants[3]).strip() if len(variants) > 3 else ""
+            return v1, v2, v3, v4, mode
         except Exception:
             pass
-    return text, "", "", "1"
+    return text, "", "", "", "1"
 
 
 def _ensure_default_recipe_actions(db, *, bot: AutomationProfile) -> None:
@@ -2774,13 +2775,13 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
         .where(AiAction.profile_id == bot.id, AiAction.destination == ActionDestination.FACEBOOK)
         .order_by(AiAction.created_at.asc()).limit(1)
     )
-    _sv1d, _sv2d, _sv3d, _smodd = _parse_prompt_variants(_site_action_diag.prompt_text if _site_action_diag else "")
-    _fv1d, _fv2d, _fv3d, _fmodd = _parse_prompt_variants(_fb_action_diag.prompt_text if _fb_action_diag else "")
-    _mode_name = {"1": "Prompt 1", "2": "Prompt 2", "3": "Prompt 3", "random": "🎲 Aleatório"}
-    _site_variants_filled = [v for v in [_sv1d, _sv2d, _sv3d] if v.strip()]
-    _fb_variants_filled   = [v for v in [_fv1d, _fv2d, _fv3d] if v.strip()]
+    _sv1d, _sv2d, _sv3d, _sv4d, _smodd = _parse_prompt_variants(_site_action_diag.prompt_text if _site_action_diag else "")
+    _fv1d, _fv2d, _fv3d, _fv4d, _fmodd = _parse_prompt_variants(_fb_action_diag.prompt_text if _fb_action_diag else "")
+    _mode_name = {"1": "Prompt 1", "2": "Prompt 2", "3": "Prompt 3", "4": "Prompt 4", "random": "🎲 Aleatório"}
+    _site_variants_filled = [v for v in [_sv1d, _sv2d, _sv3d, _sv4d] if v.strip()]
+    _fb_variants_filled   = [v for v in [_fv1d, _fv2d, _fv3d, _fv4d] if v.strip()]
 
-    if not _sv1d.strip():
+    if not any(v.strip() for v in [_sv1d, _sv2d, _sv3d, _sv4d]):
         results.append({"key": "prompt_site", "status": "warn",
                          "label": "Prompt WordPress não configurado",
                          "desc": "O bot vai usar um prompt genérico padrão.",
@@ -2794,13 +2795,14 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
                              "desc": f"O bot vai sortear um dos {_pcount} prompts a cada post.<br><small style='opacity:.7'>Ex: «{_preview}»</small>"})
         else:
             _idx = int(_smodd) - 1
-            _chosen = _site_variants_filled[_idx] if _idx < len(_site_variants_filled) else _sv1d
+            _site_variants_all = [_sv1d, _sv2d, _sv3d, _sv4d]
+            _chosen = _site_variants_all[_idx] if 0 <= _idx < len(_site_variants_all) and _site_variants_all[_idx].strip() else (_site_variants_filled[0] if _site_variants_filled else "")
             _preview = html.escape(_chosen[:90]) + ("…" if len(_chosen) > 90 else "")
             results.append({"key": "prompt_site", "status": "ok",
                              "label": f"Prompt WordPress: {_mode_name.get(_smodd, 'Prompt 1')}",
                              "desc": f"«{_preview}»"})
 
-    if not _fv1d.strip():
+    if not any(v.strip() for v in [_fv1d, _fv2d, _fv3d, _fv4d]):
         results.append({"key": "prompt_fb", "status": "warn",
                          "label": "Prompt Facebook não configurado",
                          "desc": "O bot vai usar um prompt genérico padrão.",
@@ -2814,7 +2816,8 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
                              "desc": f"O bot vai sortear um dos {_pcount} prompts a cada post.<br><small style='opacity:.7'>Ex: «{_preview}»</small>"})
         else:
             _idx = int(_fmodd) - 1
-            _chosen = _fb_variants_filled[_idx] if _idx < len(_fb_variants_filled) else _fv1d
+            _fb_variants_all = [_fv1d, _fv2d, _fv3d, _fv4d]
+            _chosen = _fb_variants_all[_idx] if 0 <= _idx < len(_fb_variants_all) and _fb_variants_all[_idx].strip() else (_fb_variants_filled[0] if _fb_variants_filled else "")
             _preview = html.escape(_chosen[:90]) + ("…" if len(_chosen) > 90 else "")
             results.append({"key": "prompt_fb", "status": "ok",
                              "label": f"Prompt Facebook: {_mode_name.get(_fmodd, 'Prompt 1')}",
@@ -3675,6 +3678,14 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 fb_pages = []
         cats_lines = "\n".join(str(c) for c in (publish_cfg.get("categories") or []) if str(c).strip())
         default_cat = str(publish_cfg.get("default_category") or "Receitas")
+        fast_publish_enabled = bool(publish_cfg.get("fast_publish_enabled"))
+        try:
+            rss_fallback_after_seconds = int(publish_cfg.get("rss_fallback_after_seconds") or 20)
+        except Exception:
+            rss_fallback_after_seconds = 20
+        rss_fallback_after_seconds = max(5, min(rss_fallback_after_seconds, 180))
+        fast_skip_wp_image = bool(publish_cfg.get("fast_skip_wp_image"))
+        fast_skip_wp_tags = bool(publish_cfg.get("fast_skip_wp_tags"))
         fb_pages_html = ""
         if fb_pages:
             items = []
@@ -3874,6 +3885,41 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                 <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Liste <b>exatamente</b> como aparecem no WordPress ” uma por linha. A IA escolhe 1 dessa lista.</div>
                 <textarea name="categories" placeholder="Receitas&#10;Viagens&#10;Tecnologia&#10;Sa&#250;de" style="min-height:180px;font-size:13px">{html.escape(cats_lines)}</textarea>
                 <div style="margin-top:8px;font-size:11px;color:var(--muted)">Categorias com nomes diferentes do WordPress causam erros de classifica&#231;&#227;o.</div>
+              </div>
+              <div class="card" style="margin-bottom:18px;padding:18px 22px">
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">Modo r&#225;pido</div>
+                <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Acelera a coleta e a reescrita. Se a busca normal travar, o bot tenta o RSS do pr&#243;prio site depois do limite definido.</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                  <label style="display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--border2);border-radius:10px">
+                    <input type="checkbox" name="fast_publish_enabled" value="1" {"checked" if fast_publish_enabled else ""} style="width:16px;height:16px;margin-top:2px" />
+                    <span>
+                      <span style="display:block;font-weight:700;font-size:13px">Ativar modo r&#225;pido</span>
+                      <span style="display:block;font-size:11px;color:var(--muted);margin-top:4px">Mant&#233;m a estrutura do post, mas reduz o caminho lento quando a fonte &#233; homepage ou listagem.</span>
+                    </span>
+                  </label>
+                  <div>
+                    <label>Trocar para RSS ap&#243;s (seg)</label>
+                    <input name="rss_fallback_after_seconds" type="number" min="5" max="180" step="1" value="{rss_fallback_after_seconds}" />
+                    <div class="muted" style="margin-top:5px;font-size:12px">Quando a coleta da URL passar desse tempo, tenta o feed RSS do mesmo site.</div>
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+                  <label style="display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--border2);border-radius:10px">
+                    <input type="checkbox" name="fast_skip_wp_image" value="1" {"checked" if fast_skip_wp_image else ""} style="width:16px;height:16px;margin-top:2px" />
+                    <span>
+                      <span style="display:block;font-weight:700;font-size:13px">Pular imagem destacada</span>
+                      <span style="display:block;font-size:11px;color:var(--muted);margin-top:4px">Corta o upload para o WordPress, que costuma ser uma das partes mais lentas.</span>
+                    </span>
+                  </label>
+                  <label style="display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--border2);border-radius:10px">
+                    <input type="checkbox" name="fast_skip_wp_tags" value="1" {"checked" if fast_skip_wp_tags else ""} style="width:16px;height:16px;margin-top:2px" />
+                    <span>
+                      <span style="display:block;font-weight:700;font-size:13px">Pular cria&#231;&#227;o de tags</span>
+                      <span style="display:block;font-size:11px;color:var(--muted);margin-top:4px">Evita chamadas extras na API do WordPress quando a prioridade for velocidade.</span>
+                    </span>
+                  </label>
+                </div>
+                <div style="margin-top:10px;font-size:11px;color:var(--muted)">Para tirar o melhor desse modo, use o Prompt 4 na aba IA para uma vers&#227;o mais enxuta da receita.</div>
               </div>
               <div style="display:flex;justify-content:flex-end">
                 <button class="btn" type="submit" style="background:#21759b;border-color:#21759b;padding:11px 28px;font-size:14px">
@@ -5439,8 +5485,8 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             )
             _ip_site_prompt = (_ip_site_action.prompt_text if _ip_site_action else "").strip()
             _ip_fb_prompt   = (_ip_fb_action.prompt_text   if _ip_fb_action   else "").strip()
-            _ip_sv1, _ip_sv2, _ip_sv3, _ip_smode = _parse_prompt_variants(_ip_site_prompt)
-            _ip_fv1, _ip_fv2, _ip_fv3, _ip_fmode = _parse_prompt_variants(_ip_fb_prompt)
+            _ip_sv1, _ip_sv2, _ip_sv3, _ip_sv4, _ip_smode = _parse_prompt_variants(_ip_site_prompt)
+            _ip_fv1, _ip_fv2, _ip_fv3, _ip_fv4, _ip_fmode = _parse_prompt_variants(_ip_fb_prompt)
             _ip_open = "open" if (_ip.active or _ip.id == p.id) else ""
             _ip_name_esc = html.escape(_ip.name)
             _ip_id = _ip.id
@@ -5449,19 +5495,19 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
             else:
                 _ip_badge = "<span class='badge-inactive' style='font-size:10px;padding:2px 7px;opacity:.8'><span class='dot-off'></span>Inativo</span>"
             _ip_wp_status = ("<span style='margin-left:auto;font-size:10px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:2px 8px;border-radius:20px'>&#9679; Configurado</span>"
-                             if _ip_sv1 else
+                             if any([_ip_sv1, _ip_sv2, _ip_sv3, _ip_sv4]) else
                              "<span style='margin-left:auto;font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);padding:2px 8px;border-radius:20px'>Vazio</span>")
             _ip_fb_status  = ("<span style='margin-left:auto;font-size:10px;font-weight:700;color:#10b981;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:2px 8px;border-radius:20px'>&#9679; Configurado</span>"
-                              if _ip_fv1 else
+                              if any([_ip_fv1, _ip_fv2, _ip_fv3, _ip_fv4]) else
                               "<span style='margin-left:auto;font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);padding:2px 8px;border-radius:20px'>Vazio</span>")
             # mode badge labels
-            _mode_labels = {"1": "Prompt 1", "2": "Prompt 2", "3": "Prompt 3", "random": "Aleat&#243;rio"}
-            _ip_smode_sel = {k: ("selected" if k == _ip_smode else "") for k in ("1","2","3","random")}
-            _ip_fmode_sel = {k: ("selected" if k == _ip_fmode else "") for k in ("1","2","3","random")}
+            _mode_labels = {"1": "Prompt 1", "2": "Prompt 2", "3": "Prompt 3", "4": "Prompt 4", "random": "Aleat&#243;rio"}
+            _ip_smode_sel = {k: ("selected" if k == _ip_smode else "") for k in ("1","2","3","4","random")}
+            _ip_fmode_sel = {k: ("selected" if k == _ip_fmode else "") for k in ("1","2","3","4","random")}
             # prompt textarea escapes
             _e = lambda s: html.escape(s or "")
-            _sv1e, _sv2e, _sv3e = _e(_ip_sv1), _e(_ip_sv2), _e(_ip_sv3)
-            _fv1e, _fv2e, _fv3e = _e(_ip_fv1), _e(_ip_fv2), _e(_ip_fv3)
+            _sv1e, _sv2e, _sv3e, _sv4e = _e(_ip_sv1), _e(_ip_sv2), _e(_ip_sv3), _e(_ip_sv4)
+            _fv1e, _fv2e, _fv3e, _fv4e = _e(_ip_fv1), _e(_ip_fv2), _e(_ip_fv3), _e(_ip_fv4)
             _iid = _ip_id.replace("-", "")  # safe JS identifier
             body += f"""
             <div class="card" style="margin-bottom:14px">
@@ -5496,6 +5542,8 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                             style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(139,92,246,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 2</button>
                           <button type="button" id="swptab_{_iid}_3" onclick="phSwitchTab('{_iid}','wp',3)"
                             style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(139,92,246,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 3</button>
+                          <button type="button" id="swptab_{_iid}_4" onclick="phSwitchTab('{_iid}','wp',4)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(139,92,246,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 4</button>
                         </div>
                         <div id="swp_{_iid}_1" style="display:block">
                           <textarea name="site_prompt_1" placeholder="Prompt 1: Reescreva a receita em portugu&#234;s com tom acolhedor e SEO completo..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_sv1e}</textarea>
@@ -5506,12 +5554,16 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                         <div id="swp_{_iid}_3" style="display:none">
                           <textarea name="site_prompt_3" placeholder="Prompt 3: Reescreva com linguagem descontra&#237;da, voltada para p&#250;blico jovem..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_sv3e}</textarea>
                         </div>
+                        <div id="swp_{_iid}_4" style="display:none">
+                          <textarea name="site_prompt_4" placeholder="Prompt 4: Reescreva no modo r&#225;pido, com a mesma estrutura, introdu&#231;&#227;o curta e texto objetivo para publicar mais cedo..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_sv4e}</textarea>
+                        </div>
                         <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
                           <span style="font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap">Bot usa:</span>
                           <select name="site_prompt_mode" style="flex:1;font-size:12px;padding:5px 8px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--fg)">
                             <option value="1" {_ip_smode_sel["1"]}>Prompt 1</option>
                             <option value="2" {_ip_smode_sel["2"]}>Prompt 2</option>
                             <option value="3" {_ip_smode_sel["3"]}>Prompt 3</option>
+                            <option value="4" {_ip_smode_sel["4"]}>Prompt 4</option>
                             <option value="random" {_ip_smode_sel["random"]}>&#127922; Aleat&#243;rio</option>
                           </select>
                         </div>
@@ -5537,6 +5589,8 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                             style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(24,119,242,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 2</button>
                           <button type="button" id="sfbtab_{_iid}_3" onclick="phSwitchTab('{_iid}','fb',3)"
                             style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(24,119,242,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 3</button>
+                          <button type="button" id="sfbtab_{_iid}_4" onclick="phSwitchTab('{_iid}','fb',4)"
+                            style="flex:1;padding:5px 0;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(24,119,242,.15);cursor:pointer;background:transparent;color:var(--muted);transition:all .15s">Prompt 4</button>
                         </div>
                         <div id="sfb_{_iid}_1" style="display:block">
                           <textarea name="facebook_prompt_1" placeholder="Prompt 1: Crie um post curto e envolvente com emojis e CTA..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_fv1e}</textarea>
@@ -5547,12 +5601,16 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                         <div id="sfb_{_iid}_3" style="display:none">
                           <textarea name="facebook_prompt_3" placeholder="Prompt 3: Post descontra&#237;do com humor leve e emojis..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_fv3e}</textarea>
                         </div>
+                        <div id="sfb_{_iid}_4" style="display:none">
+                          <textarea name="facebook_prompt_4" placeholder="Prompt 4: Post ultra curto para modo r&#225;pido, com CTA cedo e texto direto..." style="height:190px;font-size:13px;resize:none;width:100%;box-sizing:border-box">{_fv4e}</textarea>
+                        </div>
                         <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
                           <span style="font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap">Bot usa:</span>
                           <select name="facebook_prompt_mode" style="flex:1;font-size:12px;padding:5px 8px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--fg)">
                             <option value="1" {_ip_fmode_sel["1"]}>Prompt 1</option>
                             <option value="2" {_ip_fmode_sel["2"]}>Prompt 2</option>
                             <option value="3" {_ip_fmode_sel["3"]}>Prompt 3</option>
+                            <option value="4" {_ip_fmode_sel["4"]}>Prompt 4</option>
                             <option value="random" {_ip_fmode_sel["random"]}>&#127922; Aleat&#243;rio</option>
                           </select>
                         </div>
@@ -5813,10 +5871,12 @@ def profile_ai_prompts_save(
     site_prompt_1: str = Form(""),
     site_prompt_2: str = Form(""),
     site_prompt_3: str = Form(""),
+    site_prompt_4: str = Form(""),
     site_prompt_mode: str = Form("1"),
     facebook_prompt_1: str = Form(""),
     facebook_prompt_2: str = Form(""),
     facebook_prompt_3: str = Form(""),
+    facebook_prompt_4: str = Form(""),
     facebook_prompt_mode: str = Form("1"),
     user: User = Depends(get_current_user),
     db=Depends(get_db),
@@ -5826,14 +5886,15 @@ def profile_ai_prompts_save(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     _ensure_default_recipe_actions(db, bot=p)
 
-    def _build_prompt_json(v1: str, v2: str, v3: str, mode: str) -> str:
+    def _build_prompt_json(v1: str, v2: str, v3: str, v4: str, mode: str) -> str:
         v1 = (v1 or "").strip()
         v2 = (v2 or "").strip()
         v3 = (v3 or "").strip()
+        v4 = (v4 or "").strip()
         mode = (mode or "1").strip()
-        if mode not in ("1", "2", "3", "random"):
+        if mode not in ("1", "2", "3", "4", "random"):
             mode = "1"
-        return json.dumps({"mode": mode, "v": [v1, v2, v3]}, ensure_ascii=False)
+        return json.dumps({"mode": mode, "v": [v1, v2, v3, v4]}, ensure_ascii=False)
 
     site_action = db.scalar(
         select(AiAction)
@@ -5847,8 +5908,8 @@ def profile_ai_prompts_save(
         .order_by(AiAction.created_at.asc())
         .limit(1)
     )
-    sp = _build_prompt_json(site_prompt_1, site_prompt_2, site_prompt_3, site_prompt_mode)
-    fp = _build_prompt_json(facebook_prompt_1, facebook_prompt_2, facebook_prompt_3, facebook_prompt_mode)
+    sp = _build_prompt_json(site_prompt_1, site_prompt_2, site_prompt_3, site_prompt_4, site_prompt_mode)
+    fp = _build_prompt_json(facebook_prompt_1, facebook_prompt_2, facebook_prompt_3, facebook_prompt_4, facebook_prompt_mode)
     if site_action:
         site_action.prompt_text = sp
         site_action.active = True
@@ -6723,6 +6784,10 @@ def profile_publish_wordpress(
     profile_id: str,
     default_category: str = Form("Receitas"),
     categories: str = Form(""),
+    fast_publish_enabled: str = Form(""),
+    rss_fallback_after_seconds: str = Form("20"),
+    fast_skip_wp_image: str = Form(""),
+    fast_skip_wp_tags: str = Form(""),
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -6734,6 +6799,13 @@ def profile_publish_wordpress(
     cfg = dict(p.publish_config_json or {})
     cfg["default_category"] = (default_category or "Receitas").strip()
     cfg["categories"] = cats
+    cfg["fast_publish_enabled"] = str(fast_publish_enabled or "").strip() == "1"
+    try:
+        cfg["rss_fallback_after_seconds"] = max(5, min(int(rss_fallback_after_seconds or 20), 180))
+    except Exception:
+        cfg["rss_fallback_after_seconds"] = 20
+    cfg["fast_skip_wp_image"] = str(fast_skip_wp_image or "").strip() == "1"
+    cfg["fast_skip_wp_tags"] = str(fast_skip_wp_tags or "").strip() == "1"
     p.publish_config_json = cfg
     db.add(p)
     db.commit()
