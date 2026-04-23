@@ -360,7 +360,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
                     <div style="font-size:11px;color:var(--muted)">Visualizar como celular (390/412/768px)</div>
                   </div>
                 </button>
-                <button class="dev-action-btn" onclick="devLimparCache()">
+                <button class="dev-action-btn" onclick="devLimparCache(this)">
                   <span style="font-size:16px">&#128260;</span>
                   <div><div style="font-weight:600">Limpar Cache</div><div style="font-size:11px;color:var(--muted)">Recarrega a p&#225;gina ignorando cache</div></div>
                 </button>
@@ -451,16 +451,15 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       }});
 
       /* ── Limpar Cache ── */
-      window.devLimparCache = function() {{
-        // Limpa estados de toggle (ph-tgl:*) e outros caches ph-* do localStorage
+      window.devLimparCache = function(btn) {{
+        if (btn) {{ btn.textContent = 'Limpando...'; btn.disabled = true; }}
         var toRemove = [];
         for (var i = 0; i < localStorage.length; i++) {{
           var k = localStorage.key(i);
           if (k && k.startsWith('ph-')) toRemove.push(k);
         }}
         toRemove.forEach(function(k) {{ localStorage.removeItem(k); }});
-        // Força fetch sem cache do servidor
-        location.href = location.pathname + '?_cb=' + Date.now();
+        window.location.replace(window.location.pathname + '?_cb=' + Date.now());
       }};
 
       /* ── Prompt variant tabs ── */
@@ -533,8 +532,8 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         sel.addEventListener('change', function() {{ saveChoice(sel.value); }});
       }}
       var SOUND_FILES = {{
-        cash: '/sons/money.m4a',
-        money: '/sons/plim.m4a'
+        cash: '/static/mario-coins.mp3',
+        money: '/static/plim.m4a'
       }};
       function playAudioFile(src) {{
         if (!src) return;
@@ -564,7 +563,8 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       }};
       if (test) test.addEventListener('click', function() {{
         if (sel) saveChoice(sel.value);
-        window._phPlaySuccessSound(soundChoice());
+        var kind = soundChoice();
+        playAudioFile(SOUND_FILES[kind === 'off' ? 'cash' : kind] || SOUND_FILES.cash);
       }});
     }})();
 
