@@ -2238,7 +2238,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
                 <span class="active-project-stat">Posts: <b>{_b_pp}</b> pend. / <b>{_b_proc}</b> proc.</span>
               </div>
               <div class="robot-actions">
-                {f'<div class="robot-action-card"><div class="robot-action-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">&#9889;</div><div><div class="robot-action-title">Rodar pendentes agora</div><div class="robot-action-desc muted">{_b_qs} jobs agendados aguardando</div></div><div style="margin-left:auto"><button class="btn secondary ph-run-now-btn" data-bot-id="" style="white-space:nowrap">Rodar agora</button></div></div>' if _b_qs > 0 and _b_rj == 0 else ''}
+                {f'<div class="robot-action-card"><div class="robot-action-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">&#9889;</div><div><div class="robot-action-title">Rodar pendentes agora</div><div class="robot-action-desc muted">{_b_qs} jobs agendados aguardando</div></div><div style="margin-left:auto"><button class="btn secondary ph-run-now-btn" data-bot-id="{_bpr_id}" style="white-space:nowrap">Rodar agora</button></div></div>' if _b_qs > 0 and _b_rj == 0 else ''}
                 <div class="robot-action-card">
                   <div class="robot-action-icon" style="background:rgba(99,102,241,.15);color:#6366f1">&#8635;</div>
                   <div>
@@ -2865,12 +2865,18 @@ def robot_stop(request: Request, bot_id: str = Form(default=None), user: User = 
         if _is_ajax:
             return _JSONResponse({"ok": False, "error": "bot_not_found"}, status_code=404)
         return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
+    bot.active = False
+    db.add(bot)
     ids = list(db.scalars(select(Post.id).where(
         Post.profile_id == bot.id,
         Post.status.in_([PostStatus.pending, PostStatus.processing]),
     )))
     if ids:
         _cancel_posts(db, profile_id=bot.id, post_ids=[str(x) for x in ids], user=user)
+    cancelled_jobs = int(db.scalar(select(func.count()).select_from(Job).where(
+        Job.profile_id == bot.id,
+        or_(Job.status == JobStatus.queued, Job.status == JobStatus.running),
+    )) or 0)
     db.execute(
         update(Job)
         .where(Job.profile_id == bot.id, or_(Job.status == JobStatus.queued, Job.status == JobStatus.running))
@@ -2879,7 +2885,7 @@ def robot_stop(request: Request, bot_id: str = Form(default=None), user: User = 
     db.commit()
     _is_ajax = "application/json" in request.headers.get("accept", "")
     if _is_ajax:
-        return _JSONResponse({"ok": True, "cancelled_posts": len(ids)})
+        return _JSONResponse({"ok": True, "active": False, "cancelled_jobs": cancelled_jobs, "cancelled_posts": len(ids)})
     return RedirectResponse(f"/app/robot?msg={quote_plus('Robô parado com sucesso.')}", status_code=status.HTTP_302_FOUND)
 
 
@@ -3039,9 +3045,30 @@ async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(
     if bot_id:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
     else:
-        bot = db.scalar(select(AutomationProfile).where(AutomationProfile.user_id == user.id).limit(1))
+        bot = None
+        candidates = list(db.scalars(
+            select(AutomationProfile)
+            .where(AutomationProfile.user_id == user.id)
+            .order_by(AutomationProfile.active.desc(), AutomationProfile.created_at.asc())
+        ))
+        for candidate in candidates:
+            active_jobs = int(db.scalar(select(func.count()).select_from(Job).where(
+                Job.profile_id == candidate.id,
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+            )) or 0)
+            active_posts = int(db.scalar(select(func.count()).select_from(Post).where(
+                Post.profile_id == candidate.id,
+                Post.status.in_([PostStatus.pending, PostStatus.processing]),
+            )) or 0)
+            if active_jobs + active_posts > 0:
+                bot = candidate
+                break
+        if not bot and candidates:
+            bot = candidates[0]
 
     if bot:
+        bot.active = True
+        db.add(bot)
         now = datetime.utcnow()
         # 1. Libera jobs queued com run_at no futuro
         db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
@@ -3091,7 +3118,7 @@ async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(
     deadline = _time.monotonic() + 55
     while _time.monotonic() < deadline:
         try:
-            did_work = await _asyncio.to_thread(_run_tick, worker_id=worker_id)
+            did_work = await _asyncio.to_thread(_run_tick, worker_id=worker_id, user_id=user.id, profile_id=(bot.id if bot else None))
         except Exception:
             break
         if not did_work:
@@ -7191,6 +7218,20 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                 Post.status.in_([PostStatus.pending, PostStatus.processing])
             )
         ) or 0)
+    _auto_tick_ids = []
+    for _pr_auto in all_profiles:
+        if not _pr_auto.active:
+            continue
+        _auto_jobs = int(db.scalar(select(func.count()).select_from(Job).where(
+            Job.profile_id == _pr_auto.id,
+            Job.status.in_([JobStatus.queued, JobStatus.running]),
+        )) or 0)
+        _auto_posts = int(db.scalar(select(func.count()).select_from(Post).where(
+            Post.profile_id == _pr_auto.id,
+            Post.status.in_([PostStatus.pending, PostStatus.processing]),
+        )) or 0)
+        if _auto_jobs + _auto_posts > 0:
+            _auto_tick_ids.append(_pr_auto.id)
     # Script de persistência de toggles (sempre presente nesta página)
     # Técnica: servidor NÃO renderiza open/closed ” JS lê localStorage ou data-default-open
     # Isso garante que nunca há flash de "abre e fecha" no auto-reload de 5s
@@ -7294,6 +7335,27 @@ document.addEventListener('click', function(e) {
 })();
 </script>"""
     if _active_job_count > 0 or _active_post_count > 0:
+        refresh_js += f"""<script>
+(function(){{
+  var ids = {json.dumps(_auto_tick_ids)};
+  if (!ids.length || window.__phAutoTickRunning) return;
+  window.__phAutoTickRunning = true;
+  var i = 0;
+  function runNext(){{
+    if (i >= ids.length) {{
+      window.__phAutoTickRunning = false;
+      setTimeout(function(){{ location.reload(); }}, 800);
+      return;
+    }}
+    var fd = new FormData();
+    fd.append('bot_id', ids[i++]);
+    fetch('/app/robot/tick-now', {{method:'POST', body:fd, credentials:'same-origin'}})
+      .then(function(){{ runNext(); }})
+      .catch(function(){{ window.__phAutoTickRunning = false; }});
+  }}
+  setTimeout(runNext, 400);
+}})();
+</script>"""
         refresh_js += """<script>
 (function(){
   var _hash=null, _streak=0, _delay=8000, _tid=null;

@@ -89,6 +89,35 @@ def _is_post_canceled(db, post: Post) -> bool:
     return isinstance(post.outputs_json, dict) and bool(post.outputs_json.get("canceled_by_user"))
 
 
+def _is_profile_active(db, profile_id: str | None, user_id: str) -> bool:
+    if not profile_id:
+        return True
+    profile = db.scalar(select(AutomationProfile).where(AutomationProfile.id == profile_id, AutomationProfile.user_id == user_id))
+    return bool(profile and profile.active)
+
+
+def _mark_job_skipped_for_inactive_profile(db, job: Job) -> None:
+    now = datetime.utcnow()
+    if job.post_id:
+        post = db.scalar(select(Post).where(Post.id == job.post_id, Post.user_id == job.user_id))
+        if post and post.status != PostStatus.completed:
+            outputs = dict(post.outputs_json or {})
+            outputs["canceled_by_user"] = True
+            post.outputs_json = outputs
+            post.status = PostStatus.failed
+            post.updated_at = now
+            db.add(post)
+    log_event(
+        db,
+        user_id=job.user_id,
+        profile_id=job.profile_id,
+        post_id=job.post_id,
+        stage=job.type,
+        status="skipped",
+        message="profile_inactive_or_stopped",
+    )
+
+
 def _handle_collect(db, job: Job):
     profile_id = job.profile_id
     if not profile_id:
@@ -122,6 +151,12 @@ def _handle_collect(db, job: Job):
 
     def _enqueue_scraped(*, s, source_id: str, title_fallback: str | None):
         nonlocal created, skipped_duplicate
+        try:
+            db.refresh(profile)
+        except Exception:
+            pass
+        if not profile.active:
+            return
         fp = _fingerprint(user_id=job.user_id, canonical_url=s.canonical_url)
         content = CollectedContent(
             user_id=job.user_id,
@@ -242,7 +277,11 @@ def _handle_collect(db, job: Job):
             "sources": len(sources),
         },
     )
-    if limit and created < limit:
+    try:
+        db.refresh(profile)
+    except Exception:
+        pass
+    if profile.active and limit and created < limit:
         round_n = int(job.payload_json.get("collect_round") or 0)
         if round_n < 2:
             enqueue_job(
@@ -1256,6 +1295,9 @@ def _render_wp_html(text: str) -> str:
     return "\n".join(out).strip()
 
 def process_job(db, job: Job):
+    if not _is_profile_active(db, job.profile_id, job.user_id):
+        _mark_job_skipped_for_inactive_profile(db, job)
+        return
     if job.post_id and job.type != JOB_COLLECT:
         p = db.scalar(select(Post).where(Post.id == job.post_id, Post.user_id == job.user_id))
         if p and isinstance(p.outputs_json, dict) and p.outputs_json.get("canceled_by_user"):
@@ -1285,9 +1327,9 @@ def process_job(db, job: Job):
         raise ValueError("unknown_job_type")
 
 
-def run_worker_tick(*, worker_id: str) -> bool:
+def run_worker_tick(*, worker_id: str, user_id: str | None = None, profile_id: str | None = None) -> bool:
     with db_session() as db:
-        job = get_due_job(db, worker_id=worker_id)
+        job = get_due_job(db, worker_id=worker_id, user_id=user_id, profile_id=profile_id)
         if not job:
             db.commit()
             return False

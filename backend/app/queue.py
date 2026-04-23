@@ -77,9 +77,14 @@ def schedule_retry(job: Job) -> datetime:
 _STALE_LOCK_MINUTES = 3  # libera locks travados após 3 min
 
 
-def get_due_job(db, *, worker_id: str) -> Job | None:
+def get_due_job(db, *, worker_id: str, user_id: str | None = None, profile_id: str | None = None) -> Job | None:
     now = datetime.utcnow()
     stale_cutoff = now - timedelta(minutes=_STALE_LOCK_MINUTES)
+    scope_filters = []
+    if user_id:
+        scope_filters.append(Job.user_id == user_id)
+    if profile_id:
+        scope_filters.append(Job.profile_id == profile_id)
 
     # Libera jobs presos em running por mais de 3 min (timeout/crash do worker)
     try:
@@ -87,6 +92,7 @@ def get_due_job(db, *, worker_id: str) -> Job | None:
             select(Job).where(
                 Job.status == JobStatus.running,
                 Job.locked_at <= stale_cutoff,
+                *scope_filters,
             )
         ).all()
         for j in stuck:
@@ -107,6 +113,7 @@ def get_due_job(db, *, worker_id: str) -> Job | None:
             Job.run_at <= now,
             Job.attempts < Job.max_attempts,
             Job.locked_at.is_(None),
+            *scope_filters,
         )
         .order_by(Job.run_at.asc())
         .limit(1)
