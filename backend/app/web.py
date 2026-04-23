@@ -2007,10 +2007,11 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             Post.profile_id,
             func.sum(case((Post.status == PostStatus.completed, 1), else_=0)).label("completed"),
             func.sum(case((Post.status == PostStatus.failed, 1), else_=0)).label("failed"),
-            func.sum(case((Post.status == PostStatus.pending, 1), else_=0)).label("pending"),
+            func.sum(case((Post.status.in_([PostStatus.pending, PostStatus.processing]), 1), else_=0)).label("pending"),
         ).where(Post.profile_id.in_(_all_ids)).group_by(Post.profile_id)
     ).all()
     _proj_counts = {r.profile_id: (int(r.completed or 0), int(r.failed or 0), int(r.pending or 0)) for r in _proj_post_rows}
+    _proj_collect_plan = {pr.id: _active_collect_plan(db, profile_id=pr.id) for pr in all_profiles}
     # WP integrations por projeto (1 query)
     _proj_wp_rows = list(db.scalars(
         select(Integration).where(
@@ -2030,7 +2031,10 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             except Exception:
                 pass
         completed, failed, pending = _proj_counts.get(pr.id, (0, 0, 0))
-        return wp_url, completed, failed, pending
+        collect_plan = _proj_collect_plan.get(pr.id) or {}
+        pending_total = pending + int(collect_plan.get("missing") or 0)
+        requested = int(collect_plan.get("requested") or 0)
+        return wp_url, completed, failed, pending_total, requested
 
     # SVG icons (16px, no fill, stroke only)
     _ico_gear = ("<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>"
@@ -2055,7 +2059,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
     proj_rows = ""
     for pr in all_profiles:
         is_active = pr.active
-        wp_url, p_done, p_fail, p_pend = _proj_stats(pr)
+        wp_url, p_done, p_fail, p_pend, p_goal = _proj_stats(pr)
         pr_emoji = _safe((pr.publish_config_json or {}).get("emoji") or "🤖")
 
         # Badge de status na coluna "Projeto"
@@ -2124,6 +2128,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             <div style="display:flex;gap:14px">
               <div style="text-align:center"><div style="font-size:16px;font-weight:800;color:#10b981">{p_done}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Public.</div></div>
               <div style="text-align:center"><div style="font-size:16px;font-weight:800;color:var(--muted)">{p_pend}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pend.</div></div>
+              <div style="text-align:center"><div style="font-size:16px;font-weight:800;color:#6366f1">{p_goal if p_goal > 0 else '—'}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Meta</div></div>
               <div style="text-align:center"><div style="font-size:16px;font-weight:800;color:#ef4444">{p_fail}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Falhas</div></div>
             </div>
           </td>
@@ -6777,6 +6782,15 @@ def _job_payload_limit(job: Job) -> int:
     return max(0, limit)
 
 
+def _collect_job_target(job: Job) -> int:
+    payload = job.payload_json if isinstance(job.payload_json, dict) else {}
+    try:
+        start = int(payload.get("schedule_index_start") or 0)
+    except Exception:
+        start = 0
+    return max(0, start + _job_payload_limit(job))
+
+
 def _active_collect_plan(db, *, profile_id: str) -> dict:
     jobs = list(db.scalars(
         select(Job).where(
@@ -6785,10 +6799,16 @@ def _active_collect_plan(db, *, profile_id: str) -> dict:
             Job.status.in_([JobStatus.queued, JobStatus.running]),
         )
     ))
-    total_requested = sum(_job_payload_limit(j) for j in jobs)
+    if not jobs:
+        return {"missing": 0, "requested": 0, "materialized": 0, "running": False, "next_run": None, "interval_minutes": 0}
+    anchor = max(
+        jobs,
+        key=lambda j: (_collect_job_target(j), j.created_at or datetime.utcnow(), j.run_at or datetime.utcnow()),
+    )
+    total_requested = _collect_job_target(anchor)
     if total_requested <= 0:
         return {"missing": 0, "requested": 0, "materialized": 0, "running": False, "next_run": None, "interval_minutes": 0}
-    first_created = min((j.created_at for j in jobs if j.created_at), default=None)
+    first_created = anchor.created_at
     materialized = 0
     if first_created:
         materialized = int(db.scalar(
@@ -6798,10 +6818,9 @@ def _active_collect_plan(db, *, profile_id: str) -> dict:
             )
         ) or 0)
     missing = max(0, total_requested - materialized)
-    next_run = min((j.run_at for j in jobs if j.run_at), default=None)
-    running = any(j.status == JobStatus.running for j in jobs)
-    first_job = min(jobs, key=lambda j: j.run_at or j.created_at or datetime.utcnow())
-    first_payload = first_job.payload_json if isinstance(first_job.payload_json, dict) else {}
+    next_run = anchor.run_at
+    running = anchor.status == JobStatus.running
+    first_payload = anchor.payload_json if isinstance(anchor.payload_json, dict) else {}
     try:
         interval_minutes = int(first_payload.get("interval_minutes") or 0)
     except Exception:
