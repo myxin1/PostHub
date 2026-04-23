@@ -788,6 +788,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
       btn.style.opacity = '0.7';
       var fd = new FormData();
       if (botId) fd.append('bot_id', botId);
+      fd.append('force', '1');
       fetch('/app/robot/tick-now', {{method:'POST', body:fd, credentials:'same-origin'}})
         .then(function(r){{ return r.ok ? r.json() : {{ticks:0}}; }})
         .then(function(d){{
@@ -2516,7 +2517,7 @@ def _try_reconnect_wordpress(db, integ: Integration, *, base_url: str, active_us
     return result
 
 
-def _revive_profile_queue(db, *, profile_id: str) -> int:
+def _revive_profile_queue(db, *, profile_id: str, force_now: bool = False) -> int:
     now = datetime.utcnow()
     did = 0
     stuck_cutoff = now - timedelta(minutes=5)
@@ -2553,6 +2554,9 @@ def _revive_profile_queue(db, *, profile_id: str) -> int:
             next_job = pipeline[idx + 1] if idx + 1 < len(pipeline) else JOB_PUBLISH_WP
         else:
             next_job = JOB_CLEAN
+        run_at = now
+        if not force_now and p.scheduled_for and p.scheduled_for > now:
+            run_at = p.scheduled_for
         p.status = PostStatus.pending
         p.updated_at = now
         db.add(p)
@@ -2563,6 +2567,7 @@ def _revive_profile_queue(db, *, profile_id: str) -> int:
             post_id=p.id,
             job_type=next_job,
             payload={"collected_content_id": p.collected_content_id},
+            run_at=run_at,
         )
         did += 1
     return did
@@ -3044,6 +3049,8 @@ def robot_run_now(bot_id: str = Form(default=None), user: User = Depends(get_cur
         bot = _get_or_create_single_bot(db, user=user)
     if not bot:
         return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
+    bot.active = True
+    _set_bot_run_stopped(db, bot=bot, stopped=False)
     now = datetime.utcnow()
     did = 0
 
@@ -3104,7 +3111,12 @@ def robot_run_now(bot_id: str = Form(default=None), user: User = Depends(get_cur
 
 
 @router.post("/app/robot/tick-now", include_in_schema=False)
-async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+async def robot_tick_now(
+    bot_id: str = Form(default=None),
+    force: str = Form("0"),
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
     """Prepara a fila, recupera órfãos e processa jobs imediatamente (até 55s). Chamado via AJAX."""
     import asyncio as _asyncio
     import time as _time
@@ -3135,12 +3147,15 @@ async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(
         if not bot and candidates:
             bot = candidates[0]
 
+    force_now = str(force or "0") == "1"
     if bot:
-        bot.active = True
-        _set_bot_run_stopped(db, bot=bot, stopped=False)
+        if force_now:
+            bot.active = True
+            _set_bot_run_stopped(db, bot=bot, stopped=False)
         now = datetime.utcnow()
-        # 1. Libera jobs queued com run_at no futuro
-        db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
+        # 1. "Rodar agora" libera jobs futuros; processamento automatico respeita a cadencia.
+        if force_now:
+            db.execute(update(Job).where(Job.profile_id == bot.id, Job.status == JobStatus.queued).values(run_at=now))
         # 2. Reseta jobs running travados há mais de 5 min
         stuck_cutoff = now - timedelta(minutes=5)
         db.execute(
@@ -3174,11 +3189,14 @@ async def robot_tick_now(bot_id: str = Form(default=None), user: User = Depends(
                 next_job = pipeline[idx + 1] if idx + 1 < len(pipeline) else _JOB_PUBLISH_WP
             else:
                 next_job = _JOB_CLEAN
+            run_at = now
+            if not force_now and p.scheduled_for and p.scheduled_for > now:
+                run_at = p.scheduled_for
             p.status = PostStatus.pending
             p.updated_at = now
             db.add(p)
             enqueue_job(db, user_id=p.user_id, profile_id=p.profile_id, post_id=p.id,
-                        job_type=next_job, payload={"collected_content_id": p.collected_content_id})
+                        job_type=next_job, payload={"collected_content_id": p.collected_content_id}, run_at=run_at)
         db.commit()
 
     # Processa jobs em loop por até 55s
@@ -6769,7 +6787,7 @@ def _active_collect_plan(db, *, profile_id: str) -> dict:
     ))
     total_requested = sum(_job_payload_limit(j) for j in jobs)
     if total_requested <= 0:
-        return {"missing": 0, "requested": 0, "materialized": 0, "running": False, "next_run": None}
+        return {"missing": 0, "requested": 0, "materialized": 0, "running": False, "next_run": None, "interval_minutes": 0}
     first_created = min((j.created_at for j in jobs if j.created_at), default=None)
     materialized = 0
     if first_created:
@@ -6782,12 +6800,24 @@ def _active_collect_plan(db, *, profile_id: str) -> dict:
     missing = max(0, total_requested - materialized)
     next_run = min((j.run_at for j in jobs if j.run_at), default=None)
     running = any(j.status == JobStatus.running for j in jobs)
+    first_job = min(jobs, key=lambda j: j.run_at or j.created_at or datetime.utcnow())
+    first_payload = first_job.payload_json if isinstance(first_job.payload_json, dict) else {}
+    try:
+        interval_minutes = int(first_payload.get("interval_minutes") or 0)
+    except Exception:
+        interval_minutes = 0
+    try:
+        schedule_index_start = int(first_payload.get("schedule_index_start") or 0)
+    except Exception:
+        schedule_index_start = 0
     return {
         "missing": missing,
         "requested": total_requested,
         "materialized": materialized,
         "running": running,
         "next_run": next_run,
+        "interval_minutes": interval_minutes,
+        "schedule_index_start": schedule_index_start,
     }
 
 
@@ -6800,7 +6830,8 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
     ))
     revived = 0
     for profile in all_profiles:
-        if profile.active:
+        profile_cfg = dict(profile.publish_config_json or {})
+        if profile.active and not profile_cfg.get("run_stopped_at"):
             revived += _revive_profile_queue(db, profile_id=profile.id)
     if revived:
         db.commit()
@@ -7051,30 +7082,36 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
             if count <= 0:
                 return ""
             next_run = plan.get("next_run")
-            if isinstance(next_run, datetime) and next_run > now_utc:
-                target_ms = int(next_run.replace(tzinfo=timezone.utc).timestamp() * 1000)
-                tempo = f"em <b data-ph-countdown-target='{target_ms}'>...</b>"
-                when = html.escape(_fmt_dt(next_run, user=user))
-            elif plan.get("running"):
-                tempo = "coletando fontes agora"
-                when = "agora"
-            else:
-                tempo = "na fila de coleta"
-                when = "agora"
-            qty_label = f"{count} post{'s' if count != 1 else ''} em prepara&ccedil;&atilde;o"
-            return (
-                "<tr style='border-top:1px solid var(--border);background:rgba(245,158,11,.05)'>"
-                "<td style='padding:10px 14px;width:36px'>"
-                "<input type='checkbox' disabled style='width:14px;height:14px;opacity:.35'/></td>"
-                f"<td style='padding:10px 14px;font-size:13px;color:var(--text)'><b>{qty_label}</b>"
-                "<div style='font-size:11px;color:var(--muted);margin-top:3px'>"
-                "Os posts aparecem aqui como itens reais assim que a coleta identifica as receitas.</div></td>"
-                "<td style='padding:10px 14px'><span style='color:#f59e0b;font-size:11px;font-weight:700;"
-                "background:rgba(245,158,11,.12);padding:3px 8px;border-radius:20px'>"
-                "Preparando</span></td>"
-                f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{when}</td>"
-                f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{tempo}</td></tr>"
-            )
+            interval = int(plan.get("interval_minutes") or 0)
+            rows = ""
+            for idx in range(count):
+                if isinstance(next_run, datetime) and next_run > now_utc:
+                    target = next_run + timedelta(minutes=interval * idx if interval else 0)
+                    target_ms = int(target.replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    tempo = f"coleta em <b data-ph-countdown-target='{target_ms}'>...</b>"
+                    when = html.escape(_fmt_dt(target, user=user))
+                elif plan.get("running"):
+                    tempo = "coletando fontes agora"
+                    when = "agora"
+                else:
+                    tempo = "na fila de coleta"
+                    when = "agora"
+                cadence = f"<div style='font-size:11px;color:var(--muted);margin-top:3px'>Cadencia: {interval} min entre posts.</div>" if interval else ""
+                rows += (
+                    "<tr style='border-top:1px solid var(--border);background:rgba(245,158,11,.05)'>"
+                    "<td style='padding:10px 14px;width:36px'>"
+                    "<input type='checkbox' disabled style='width:14px;height:14px;opacity:.35'/></td>"
+                    f"<td style='padding:10px 14px;font-size:13px;color:var(--text)'><b>Post planejado {idx + 1} de {count}</b>"
+                    "<div style='font-size:11px;color:var(--muted);margin-top:3px'>"
+                    "Ainda em coleta. Vai virar item real assim que uma receita valida for encontrada.</div>"
+                    f"{cadence}</td>"
+                    "<td style='padding:10px 14px'><span style='color:#f59e0b;font-size:11px;font-weight:700;"
+                    "background:rgba(245,158,11,.12);padding:3px 8px;border-radius:20px'>"
+                    "Planejado</span></td>"
+                    f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{when}</td>"
+                    f"<td style='padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap'>{tempo}</td></tr>"
+                )
+            return rows
 
         def _build_fail_rows(items):
             out = ""
@@ -7298,6 +7335,9 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
     _auto_tick_ids = []
     for _pr_auto in all_profiles:
         if not _pr_auto.active:
+            continue
+        _auto_cfg = dict(_pr_auto.publish_config_json or {})
+        if _auto_cfg.get("run_stopped_at"):
             continue
         _auto_jobs = int(db.scalar(select(func.count()).select_from(Job).where(
             Job.profile_id == _pr_auto.id,

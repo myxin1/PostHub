@@ -130,17 +130,26 @@ def _handle_collect(db, job: Job):
         return
     sources = list(db.scalars(select(Source).where(Source.profile_id == profile_id, Source.active.is_(True))))
     sched = dict(profile.schedule_config_json or {})
+    payload = job.payload_json if isinstance(job.payload_json, dict) else {}
     default_limit = int(sched.get("posts_per_day") or 15)
     default_interval = int(sched.get("interval_minutes") or 0)
-    respect = int(job.payload_json.get("respect_schedule") or sched.get("respect_schedule") or 0) == 1
-    limit = int(job.payload_json.get("limit") or default_limit)
+    respect = int(payload.get("respect_schedule") or sched.get("respect_schedule") or 0) == 1
+    limit = int(payload.get("limit") or default_limit)
     # interval_minutes always applied when set; respect_schedule only gates start_at_utc
-    interval_minutes = int(job.payload_json.get("interval_minutes") or default_interval)
+    interval_minutes = int(payload.get("interval_minutes") or default_interval)
+    schedule_index_start = int(payload.get("schedule_index_start") or 0)
     created = 0
     skipped_duplicate = 0
     skipped_non_recipe = 0
     skipped_error = 0
     base_run_at = datetime.utcnow()
+    base_payload = str(payload.get("base_run_at_utc") or "").strip()
+    if base_payload:
+        try:
+            dt = datetime.fromisoformat(base_payload.replace("Z", "+00:00"))
+            base_run_at = dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+        except Exception:
+            pass
     start_at_utc = str(sched.get("start_at_utc") or "").strip()
     if respect and start_at_utc:
         try:
@@ -179,12 +188,19 @@ def _handle_collect(db, job: Job):
         except IntegrityError:
             skipped_duplicate += 1
             return
-        post = Post(user_id=job.user_id, profile_id=profile_id, collected_content_id=content.id, status=PostStatus.pending)
-        db.add(post)
-        db.flush()
+        schedule_index = schedule_index_start + created
         run_at = None
         if interval_minutes:
-            run_at = base_run_at + timedelta(minutes=interval_minutes * created)
+            run_at = base_run_at + timedelta(minutes=interval_minutes * schedule_index)
+        post = Post(
+            user_id=job.user_id,
+            profile_id=profile_id,
+            collected_content_id=content.id,
+            status=PostStatus.pending,
+            scheduled_for=run_at or base_run_at,
+        )
+        db.add(post)
+        db.flush()
         enqueue_job(
             db,
             user_id=job.user_id,
@@ -278,6 +294,8 @@ def _handle_collect(db, job: Job):
             "skipped_non_recipe": skipped_non_recipe,
             "skipped_error": skipped_error,
             "sources": len(sources),
+            "requested": limit,
+            "collect_round": int(payload.get("collect_round") or 0),
         },
     )
     try:
@@ -286,8 +304,8 @@ def _handle_collect(db, job: Job):
         pass
     profile_cfg = dict(profile.publish_config_json or {})
     if profile.active and not profile_cfg.get("run_stopped_at") and limit and created < limit:
-        round_n = int(job.payload_json.get("collect_round") or 0)
-        if round_n < 2:
+        round_n = int(payload.get("collect_round") or 0)
+        if round_n < 10:
             enqueue_job(
                 db,
                 user_id=job.user_id,
@@ -298,6 +316,8 @@ def _handle_collect(db, job: Job):
                     "interval_minutes": interval_minutes,
                     "respect_schedule": 1 if respect else 0,
                     "collect_round": round_n + 1,
+                    "schedule_index_start": schedule_index_start + created,
+                    "base_run_at_utc": base_run_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
                 },
             )
 
