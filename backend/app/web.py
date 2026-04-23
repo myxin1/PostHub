@@ -2108,12 +2108,8 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
             _pr_name_esc = html.escape(_pr.name)
             _pr_id = _pr.id
             if _ip:
-                _card_btn = (f"<form method='post' action='/app/robot/stop' style='margin:0'>"
-                             f"<input type='hidden' name='bot_id' value='{_pr_id}' />"
-                             f"<button type='submit' class='btn-running'"
-                             f" onmouseover=\"this.innerHTML='&#9632; Parar'\""
-                             f" onmouseout=\"this.innerHTML='&#9889; Rodando...'\">&#9889; Rodando...</button>"
-                             f"</form>")
+                _card_btn = (f"<button type='button' class='btn-running ph-stop-bot-btn' data-bot-id='{_pr_id}'>"
+                             f"&#9632; Parar Bot</button>")
                 _icon_bg = "linear-gradient(135deg,#10b981,#059669)"
                 _card_border = "2px solid #10b981"
                 _card_bg = "rgba(16,185,129,.06)"
@@ -2144,7 +2140,7 @@ def robot_panel(request: Request, user: User = Depends(get_current_user), db=Dep
         )
         _pub_alert = ""
         if _any_running:
-            _pub_alert = "<div class='publishing-alert'><span class='pal-dot'></span>&#9889; Bot publicando agora ” clique em <strong>Rodando...</strong> para interromper</div>"
+            _pub_alert = “<div class='publishing-alert'><span class='pal-dot'></span>&#9889; Bot publicando agora</div>”
 
         _active_banner = f"""
     <div class="active-project-banner" style="margin-bottom:14px;flex-direction:column;align-items:stretch;gap:10px">
@@ -2859,12 +2855,15 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
 
 
 @router.post("/app/robot/stop", include_in_schema=False)
-def robot_stop(bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
+def robot_stop(request: Request, bot_id: str = Form(default=None), user: User = Depends(get_current_user), db=Depends(get_db)):
     if bot_id:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
     else:
         bot = _get_or_create_single_bot(db, user=user)
     if not bot:
+        _is_ajax = "application/json" in request.headers.get("accept", "")
+        if _is_ajax:
+            return _JSONResponse({"ok": False, "error": "bot_not_found"}, status_code=404)
         return RedirectResponse("/app/robot", status_code=status.HTTP_302_FOUND)
     ids = list(db.scalars(select(Post.id).where(
         Post.profile_id == bot.id,
@@ -2878,6 +2877,9 @@ def robot_stop(bot_id: str = Form(default=None), user: User = Depends(get_curren
         .values(status=JobStatus.failed, last_error="canceled_by_user", locked_at=None, locked_by=None, updated_at=datetime.utcnow())
     )
     db.commit()
+    _is_ajax = "application/json" in request.headers.get("accept", "")
+    if _is_ajax:
+        return _JSONResponse({"ok": True, "cancelled_posts": len(ids)})
     return RedirectResponse(f"/app/robot?msg={quote_plus('Robô parado com sucesso.')}", status_code=status.HTTP_302_FOUND)
 
 
@@ -7227,6 +7229,32 @@ document.addEventListener('click', function(e) {
       btn.innerHTML = d.ticks > 0 ? ('&#10003; ' + d.ticks + ' job(s) processado(s)') : '&#10003; Sem jobs na fila';
       btn.style.opacity = '1';
       setTimeout(function(){ location.reload(); }, 1200);
+    })
+    .catch(function(){
+      btn.disabled = false;
+      btn.innerHTML = orig;
+      btn.style.opacity = '1';
+    });
+});
+
+/* ── Parar Bot (AJAX) ── */
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.ph-stop-bot-btn');
+  if (!btn || btn.disabled) return;
+  e.preventDefault();
+  var botId = btn.getAttribute('data-bot-id') || '';
+  btn.disabled = true;
+  var orig = btn.innerHTML;
+  btn.innerHTML = '&#8987; Parando...';
+  btn.style.opacity = '0.7';
+  var fd = new FormData();
+  if (botId) fd.append('bot_id', botId);
+  fetch('/app/robot/stop', {method:'POST', body:fd, credentials:'same-origin', headers:{Accept:'application/json'}})
+    .then(function(r){ return r.ok ? r.json() : {ok:false}; })
+    .then(function(d){
+      btn.innerHTML = d.ok ? '&#10003; Bot parado' : '&#10007; Erro ao parar';
+      btn.style.opacity = '1';
+      setTimeout(function(){ location.reload(); }, 1000);
     })
     .catch(function(){
       btn.disabled = false;
