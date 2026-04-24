@@ -1,10 +1,12 @@
 param(
-    [string]$ProjectName = "posthub"
+    [string]$ProjectName = "posthub",
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectDir
+$VercelCli = if (Get-Command "vercel.cmd" -ErrorAction SilentlyContinue) { "vercel.cmd" } else { "vercel" }
 
 function Write-Section {
     param([string]$Title)
@@ -149,10 +151,42 @@ function Remove-VercelEnvIfPresent {
         [string]$TargetEnv
     )
     try {
-        & vercel env rm $Name $TargetEnv --yes *> $null
+        $null = Invoke-Vercel -Arguments @("env", "rm", $Name, $TargetEnv, "--yes") -IgnoreExitCode
     }
     catch {
     }
+}
+
+function Invoke-Vercel {
+    param(
+        [string[]]$Arguments,
+        [string]$InputText = "",
+        [switch]$IgnoreExitCode
+    )
+    $QuotedArgs = foreach ($Argument in $Arguments) {
+        if ($Argument -match '[\s"&|<>^]') {
+            '"' + ($Argument -replace '"', '\"') + '"'
+        }
+        else {
+            $Argument
+        }
+    }
+    $CommandLine = "$VercelCli $($QuotedArgs -join ' ') 2>&1"
+    if ($InputText -ne "") {
+        $Output = $InputText | & cmd.exe /d /c $CommandLine | Out-String
+    }
+    else {
+        $Output = & cmd.exe /d /c $CommandLine | Out-String
+    }
+    $ExitCode = $LASTEXITCODE
+    $Text = $Output.TrimEnd()
+    if (-not $IgnoreExitCode -and $ExitCode -ne 0) {
+        if ([string]::IsNullOrWhiteSpace($Text)) {
+            throw "Vercel command failed with exit code $ExitCode."
+        }
+        throw $Text
+    }
+    return $Text
 }
 
 function Set-VercelEnvValue {
@@ -163,16 +197,16 @@ function Set-VercelEnvValue {
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return
     }
-    foreach ($TargetEnv in @("production", "preview")) {
+    foreach ($TargetEnv in @("production")) {
         Remove-VercelEnvIfPresent -Name $Name -TargetEnv $TargetEnv
-        $Value | & vercel env add $Name $TargetEnv *> $null
+        $null = Invoke-Vercel -Arguments @("env", "add", $Name, $TargetEnv, "--value", $Value, "--yes")
     }
     Write-Host "  - $Name"
 }
 
 Write-Section "PostHUB deploy for Vercel"
 
-Require-Command -Name "vercel"
+Require-Command -Name $VercelCli
 
 $Defaults = @{}
 Import-SimpleEnvFile -Path (Join-Path $ProjectDir "backend/.env") -Target $Defaults
@@ -180,7 +214,7 @@ Import-SimpleEnvFile -Path (Join-Path $ProjectDir ".env.local") -Target $Default
 Import-SimpleEnvFile -Path (Join-Path $ProjectDir ".env.vercel") -Target $Defaults
 
 try {
-    $VercelUser = (& vercel whoami 2>$null).Trim()
+    $VercelUser = (Invoke-Vercel -Arguments @("whoami")).Trim()
 }
 catch {
     throw "You are not logged into Vercel yet. Run 'vercel login' and try again."
@@ -194,8 +228,8 @@ if (Test-Path $ProjectLinkFile) {
     Write-Host "Project already linked through .vercel/project.json"
 }
 else {
-    $LinkOutput = & vercel --yes --name $ProjectName 2>&1
-    $LinkOutput | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }
+    $LinkOutput = Invoke-Vercel -Arguments @("--yes", "--name", $ProjectName)
+    ($LinkOutput -split "`r?`n" | Select-Object -Last 5) | ForEach-Object { Write-Host $_ }
 }
 
 Write-Section "Runtime settings"
@@ -203,11 +237,29 @@ Write-Host "Leave DATABASE_URL empty to keep the current remote value."
 Write-Host "If the project has no DATABASE_URL yet, Vercel will fall back to temporary SQLite."
 Write-Host ""
 
-$DatabaseUrl = Prompt-Value -Label "DATABASE_URL" -DefaultValue (Get-DefaultValue -Name "DATABASE_URL" -Defaults $Defaults)
-$AdminLogin = Prompt-Value -Label "Admin login" -DefaultValue (Get-DefaultValue -Name "POSTHUB_ADMIN_LOGIN" -Defaults $Defaults -Fallback "adm")
-$AdminEmail = Prompt-Value -Label "Admin email" -DefaultValue (Get-DefaultValue -Name "POSTHUB_ADMIN_EMAIL" -Defaults $Defaults -Fallback "admin@posthub.local")
-$AdminPassword = Prompt-SecretValue -Label "Admin password" -DefaultValue (Get-DefaultValue -Name "POSTHUB_ADMIN_PASSWORD" -Defaults $Defaults)
-$BaseUrl = Prompt-Value -Label "BASE_URL for Google OAuth (optional)" -DefaultValue (Get-DefaultValue -Name "BASE_URL" -Defaults $Defaults)
+$DefaultDatabaseUrl = Get-DefaultValue -Name "DATABASE_URL" -Defaults $Defaults
+$DefaultAdminLogin = Get-DefaultValue -Name "POSTHUB_ADMIN_LOGIN" -Defaults $Defaults -Fallback "adm"
+$DefaultAdminEmail = Get-DefaultValue -Name "POSTHUB_ADMIN_EMAIL" -Defaults $Defaults -Fallback "admin@posthub.local"
+$DefaultAdminPassword = Get-DefaultValue -Name "POSTHUB_ADMIN_PASSWORD" -Defaults $Defaults
+$DefaultBaseUrl = Get-DefaultValue -Name "BASE_URL" -Defaults $Defaults
+
+if ($NonInteractive) {
+    $DatabaseUrl = $DefaultDatabaseUrl
+    $AdminLogin = $DefaultAdminLogin
+    $AdminEmail = $DefaultAdminEmail
+    $AdminPassword = $DefaultAdminPassword
+    $BaseUrl = $DefaultBaseUrl
+    if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
+        throw "POSTHUB_ADMIN_PASSWORD is required when using -NonInteractive."
+    }
+}
+else {
+    $DatabaseUrl = Prompt-Value -Label "DATABASE_URL" -DefaultValue $DefaultDatabaseUrl
+    $AdminLogin = Prompt-Value -Label "Admin login" -DefaultValue $DefaultAdminLogin
+    $AdminEmail = Prompt-Value -Label "Admin email" -DefaultValue $DefaultAdminEmail
+    $AdminPassword = Prompt-SecretValue -Label "Admin password" -DefaultValue $DefaultAdminPassword
+    $BaseUrl = Prompt-Value -Label "BASE_URL for Google OAuth (optional)" -DefaultValue $DefaultBaseUrl
+}
 
 $JwtSecret = Get-DefaultValue -Name "JWT_SECRET" -Defaults $Defaults
 if ([string]::IsNullOrWhiteSpace($JwtSecret)) { $JwtSecret = New-HexSecret }
@@ -263,11 +315,12 @@ if (-not [string]::IsNullOrWhiteSpace($GoogleClientId)) {
 }
 
 Write-Section "Production deploy"
-$DeployOutput = & vercel --prod --yes 2>&1
-$DeployOutput | Select-Object -Last 10 | ForEach-Object { Write-Host $_ }
+$DeployOutput = Invoke-Vercel -Arguments @("--prod", "--yes")
+$DeployLines = $DeployOutput -split "`r?`n"
+$DeployLines | Select-Object -Last 10 | ForEach-Object { Write-Host $_ }
 
 $ProductionUrl = ""
-foreach ($Line in $DeployOutput) {
+foreach ($Line in $DeployLines) {
     if ($Line -match '(https://[A-Za-z0-9._/-]+\.vercel\.app)') {
         $ProductionUrl = $Matches[1]
     }

@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_NAME="${PROJECT_NAME:-posthub}"
+VERCEL_BIN="${VERCEL_BIN:-vercel}"
 
 cd "$PROJECT_DIR"
 
@@ -76,7 +77,7 @@ new_base64_secret() {
 remove_env_if_present() {
   local key="$1"
   local target_env="$2"
-  vercel env rm "$key" "$target_env" --yes >/dev/null 2>&1 || true
+  "$VERCEL_BIN" env rm "$key" "$target_env" --yes >/dev/null 2>&1 || true
 }
 
 set_env_value() {
@@ -88,34 +89,34 @@ set_env_value() {
   local target_env
   for target_env in production preview; do
     remove_env_if_present "$key" "$target_env"
-    printf '%s\n' "$value" | vercel env add "$key" "$target_env" >/dev/null
+    printf '%s\n' "$value" | "$VERCEL_BIN" env add "$key" "$target_env" >/dev/null
   done
   printf '  - %s\n' "$key"
 }
 
 print_section "PostHUB deploy for Vercel"
 
-require_command vercel
+require_command "$VERCEL_BIN"
 require_command python
 
 load_env_file "$PROJECT_DIR/backend/.env"
 load_env_file "$PROJECT_DIR/.env.local"
 load_env_file "$PROJECT_DIR/.env.vercel"
 
-if ! vercel whoami >/dev/null 2>&1; then
+if ! "$VERCEL_BIN" whoami >/dev/null 2>&1; then
   printf 'You are not logged into Vercel yet.\n' >&2
   printf 'Run: vercel login\n' >&2
   exit 1
 fi
 
-VERCEL_USER="$(vercel whoami 2>/dev/null)"
+VERCEL_USER="$("$VERCEL_BIN" whoami 2>/dev/null)"
 printf 'Vercel account: %s\n' "$VERCEL_USER"
 
 print_section "Project link"
 if [[ -f "$PROJECT_DIR/.vercel/project.json" ]]; then
   printf 'Project already linked through .vercel/project.json\n'
 else
-  vercel --yes --name "$PROJECT_NAME" 2>&1 | tail -5
+  "$VERCEL_BIN" --yes --name "$PROJECT_NAME" 2>&1 | tail -5
 fi
 
 print_section "Runtime settings"
@@ -174,7 +175,7 @@ if [[ -n "${GOOGLE_CLIENT_ID:-}" ]]; then
 fi
 
 print_section "Production deploy"
-DEPLOY_OUTPUT="$(vercel --prod --yes 2>&1)"
+DEPLOY_OUTPUT="$("$VERCEL_BIN" --prod --yes 2>&1)"
 printf '%s\n' "$DEPLOY_OUTPUT" | tail -10
 
 PROD_URL="$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -1 || true)"
