@@ -2535,7 +2535,7 @@ def _revive_profile_queue(db, *, profile_id: str, force_now: bool = False) -> in
         ).values(status=JobStatus.queued, run_at=now, locked_at=None, locked_by=None, updated_at=now)
     ).rowcount or 0)
 
-    pipeline = [JOB_CLEAN, JOB_AI, JOB_MEDIA, JOB_PUBLISH_WP]
+    pipeline = [JOB_CLEAN, JOB_AI, JOB_PUBLISH_WP]
     orphan_posts = list(db.scalars(
         select(Post).where(
             Post.profile_id == profile_id,
@@ -3079,7 +3079,7 @@ def robot_run_now(bot_id: str = Form(default=None), user: User = Depends(get_cur
     ).rowcount
 
     # 3. Posts pending/processing sem nenhum job ativo → re-enfileira o próximo step
-    pipeline = [JOB_CLEAN, JOB_AI, JOB_MEDIA, JOB_PUBLISH_WP]
+    pipeline = [JOB_CLEAN, JOB_AI, JOB_PUBLISH_WP]
     orphan_posts = list(db.scalars(
         select(Post).where(
             Post.profile_id == bot.id,
@@ -3129,7 +3129,7 @@ async def robot_tick_now(
     import asyncio as _asyncio
     import time as _time
     from app.worker import run_worker_tick as _run_tick
-    from app.queue import JOB_CLEAN as _JOB_CLEAN, JOB_AI as _JOB_AI, JOB_MEDIA as _JOB_MEDIA, JOB_PUBLISH_WP as _JOB_PUBLISH_WP
+    from app.queue import JOB_CLEAN as _JOB_CLEAN, JOB_AI as _JOB_AI, JOB_PUBLISH_WP as _JOB_PUBLISH_WP
 
     if bot_id:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
@@ -3172,7 +3172,7 @@ async def robot_tick_now(
             ).values(status=JobStatus.queued, run_at=now, locked_at=None, locked_by=None)
         )
         # 3. Recupera posts órfãos: pending/processing sem nenhum job ativo
-        pipeline = [_JOB_CLEAN, _JOB_AI, _JOB_MEDIA, _JOB_PUBLISH_WP]
+        pipeline = [_JOB_CLEAN, _JOB_AI, _JOB_PUBLISH_WP]
         orphan_posts = list(db.scalars(
             select(Post).where(
                 Post.profile_id == bot.id,
@@ -6935,6 +6935,15 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
     total_pend_planned = sum(int(plan.get("missing") or 0) for plan in collect_plan_by_profile.values())
     total_pend = total_pend_real + total_pend_planned
     total_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id.in_(all_ids), Post.status == PostStatus.failed)) or 0) if all_ids else 0
+    worker_inline_enabled = os.getenv("POSTHUB_INLINE_WORKER", "1") != "0"
+    cron_secret_configured = bool((os.getenv("CRON_SECRET") or "").strip())
+    worker_tick_url = str(request.base_url).rstrip("/") + "/api/worker/tick"
+    worker_curl = f'curl -X GET "{worker_tick_url}" -H "Authorization: Bearer <CRON_SECRET>"'
+    worker_fetch = (
+        "fetch("
+        + json.dumps(worker_tick_url)
+        + ", {headers:{Authorization:'Bearer ' + process.env.CRON_SECRET}})"
+    )
 
     # ── Summary bar ─────────────────────────────────────────────────────────
     summary_bar = f"""
@@ -6961,6 +6970,60 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
     flash_msg = (request.query_params.get("msg") or "").strip()
     flash_html = f"<div class='card' style='border-color:rgba(99,102,241,.4);margin-bottom:14px'><b>{html.escape(flash_msg)}</b></div>" if flash_msg else ""
     now_utc = datetime.utcnow()
+    worker_notice = ""
+    if not worker_inline_enabled:
+        worker_notice = """
+        <div class="card" style="margin-bottom:14px;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.06)">
+          <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div style="width:38px;height:38px;border-radius:10px;background:rgba(245,158,11,.16);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">&#9888;</div>
+            <div style="flex:1;min-width:260px">
+              <div style="font-size:14px;font-weight:800;color:#f59e0b">Fila em modo serverless</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.6">
+                Neste deploy o worker inline est&#225; desligado. Sem cron externo, a fila anda melhor com esta tela aberta ou usando o bot&#227;o <b>Rodar agora</b>.
+                No plano Hobby da Vercel, o cron nativo n&#227;o pode rodar a cada minuto.
+              </div>
+            </div>
+          </div>
+        </div>"""
+    cron_helper = f"""
+    <details class="card toggle-section" data-persist-toggle="worker-cron-help" style="margin-bottom:14px;padding:0;overflow:hidden">
+      <summary style="padding:14px 18px">
+        <span class="ts-title" style="display:flex;align-items:center;gap:8px">
+          <span style="width:24px;height:24px;border-radius:6px;background:rgba(16,185,129,.12);display:inline-flex;align-items:center;justify-content:center">&#9201;</span>
+          Cron externo do worker
+          <span class="ts-badge" style="color:{'#10b981' if cron_secret_configured else '#ef4444'};border-color:{'rgba(16,185,129,.3)' if cron_secret_configured else 'rgba(239,68,68,.3)'}">
+            {'CRON_SECRET ok' if cron_secret_configured else 'CRON_SECRET faltando'}
+          </span>
+        </span>
+        <span class="ts-arrow">&#9658;</span>
+      </summary>
+      <div class="ts-body" style="padding:14px 18px 16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+          <div>
+            <div style="font-size:13px;font-weight:700;margin-bottom:6px">URL para agendar</div>
+            <textarea readonly style="min-height:68px;font-size:12px;background:var(--surface2)">{html.escape(worker_tick_url)}</textarea>
+            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Agende uma chamada GET a cada 1 minuto em um provedor externo como cron-job.org, EasyCron, GitHub Actions, Pipedream ou Uptime Kuma.</div>
+          </div>
+          <div>
+            <div style="font-size:13px;font-weight:700;margin-bottom:6px">Header obrigat&#243;rio</div>
+            <textarea readonly style="min-height:68px;font-size:12px;background:var(--surface2)">Authorization: Bearer &lt;CRON_SECRET&gt;</textarea>
+            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Use o valor salvo em <code>CRON_SECRET</code> no Vercel. Quando essa vari&#225;vel existe, o endpoint exige o token no header.</div>
+          </div>
+          <div>
+            <div style="font-size:13px;font-weight:700;margin-bottom:6px">Exemplo cURL</div>
+            <textarea readonly style="min-height:90px;font-size:12px;background:var(--surface2)">{html.escape(worker_curl)}</textarea>
+          </div>
+          <div>
+            <div style="font-size:13px;font-weight:700;margin-bottom:6px">Exemplo JavaScript</div>
+            <textarea readonly style="min-height:90px;font-size:12px;background:var(--surface2)">{html.escape(worker_fetch)}</textarea>
+          </div>
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.6">
+          Cada chamada do worker processa a fila em loop por at&#233; 50 segundos. Nos novos posts, o pipeline tamb&#233;m ficou mais curto e n&#227;o cria mais a etapa separada de m&#237;dia.
+        </div>
+      </div>
+    </details>
+    """
     help_menu = f"""
     <details class="card toggle-section" data-persist-toggle="help-menu-posts" style="margin-bottom:14px;padding:0;overflow:hidden">
       <summary style="padding:14px 18px">
@@ -7594,7 +7657,7 @@ document.addEventListener('click', function(e) {
 })();
 </script>"""
 
-    body = flash_html + _ph("secao-posts") + summary_bar + help_menu + bot_sections + refresh_js
+    body = flash_html + _ph("secao-posts") + summary_bar + worker_notice + cron_helper + help_menu + bot_sections + refresh_js
     return _layout("Posts", body, user=user, active_nav="posts")
 
 

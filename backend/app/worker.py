@@ -437,6 +437,64 @@ def _build_fast_site_prompt(site_instr: str) -> str:
     )
 
 
+def _has_wordpress_action(db, *, user_id: str, profile_id: str | None) -> bool:
+    if profile_id:
+        return (
+            db.scalar(
+                select(AiAction.id).where(
+                    AiAction.profile_id == profile_id,
+                    AiAction.active.is_(True),
+                    AiAction.destination == ActionDestination.WORDPRESS,
+                )
+            )
+            is not None
+        )
+    return (
+        db.scalar(
+            select(AiAction.id).where(
+                AiAction.user_id == user_id,
+                AiAction.active.is_(True),
+                AiAction.destination == ActionDestination.WORDPRESS,
+            )
+        )
+        is not None
+    )
+
+
+def _continue_after_ai(db, *, job: Job, post: Post, content: CollectedContent, content_id: str) -> None:
+    outputs: dict = dict(post.outputs_json or {})
+    if content.lead_image_url and not outputs.get("image"):
+        outputs["image"] = {"url": content.lead_image_url}
+        post.outputs_json = outputs
+        post.updated_at = datetime.utcnow()
+        db.add(post)
+        db.flush()
+    if _is_post_canceled(db, post):
+        return
+    if _has_wordpress_action(db, user_id=job.user_id, profile_id=job.profile_id):
+        enqueue_job(
+            db,
+            user_id=job.user_id,
+            profile_id=job.profile_id,
+            post_id=job.post_id,
+            job_type=JOB_PUBLISH_WP,
+            payload={"collected_content_id": content_id},
+        )
+    else:
+        post.status = PostStatus.completed
+        post.updated_at = datetime.utcnow()
+        db.add(post)
+        log_event(
+            db,
+            user_id=job.user_id,
+            profile_id=job.profile_id,
+            post_id=job.post_id,
+            stage=JOB_PUBLISH_WP,
+            status="skipped",
+            message="no_wordpress_action_configured",
+        )
+
+
 def _get_output_image_url(outputs: dict | None, *, fallback_url: str | None = None) -> str:
     """Return the best image URL stored in outputs, tolerating old and new shapes."""
     data = outputs if isinstance(outputs, dict) else {}
@@ -675,11 +733,12 @@ def _handle_ai(db, job: Job):
     post.updated_at = datetime.utcnow()
     db.add(post)
     db.flush()
-    enqueue_job(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, job_type=JOB_MEDIA, payload={"collected_content_id": content_id})
+    _continue_after_ai(db, job=job, post=post, content=content, content_id=content_id)
     log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_AI, status="ok", message="ai_completed")
 
 
 def _handle_media(db, job: Job):
+    # Legacy compatibility: old queued jobs may still point here.
     content_id = job.payload_json.get("collected_content_id")
     if not content_id or not job.post_id:
         raise ValueError("missing_content_or_post")
@@ -688,59 +747,7 @@ def _handle_media(db, job: Job):
     if not content or not post:
         raise ValueError("content_or_post_not_found")
     _ensure_post_processing(db, post)
-    if content.lead_image_url:
-        outputs: dict = dict(post.outputs_json or {})
-        outputs["image"] = {"url": content.lead_image_url}
-        post.outputs_json = outputs
-        post.updated_at = datetime.utcnow()
-        db.add(post)
-        db.flush()
-    if _is_post_canceled(db, post):
-        return
-    if job.profile_id:
-        has_wp_action = (
-            db.scalar(
-                select(AiAction.id).where(
-                    AiAction.profile_id == job.profile_id,
-                    AiAction.active.is_(True),
-                    AiAction.destination == ActionDestination.WORDPRESS,
-                )
-            )
-            is not None
-        )
-    else:
-        has_wp_action = (
-            db.scalar(
-                select(AiAction.id).where(
-                    AiAction.user_id == job.user_id,
-                    AiAction.active.is_(True),
-                    AiAction.destination == ActionDestination.WORDPRESS,
-                )
-            )
-            is not None
-        )
-    if has_wp_action:
-        enqueue_job(
-            db,
-            user_id=job.user_id,
-            profile_id=job.profile_id,
-            post_id=job.post_id,
-            job_type=JOB_PUBLISH_WP,
-            payload={"collected_content_id": content_id},
-        )
-    else:
-        post.status = PostStatus.completed
-        post.updated_at = datetime.utcnow()
-        db.add(post)
-        log_event(
-            db,
-            user_id=job.user_id,
-            profile_id=job.profile_id,
-            post_id=job.post_id,
-            stage=JOB_PUBLISH_WP,
-            status="skipped",
-            message="no_wordpress_action_configured",
-        )
+    _continue_after_ai(db, job=job, post=post, content=content, content_id=content_id)
     log_event(db, user_id=job.user_id, profile_id=job.profile_id, post_id=job.post_id, stage=JOB_MEDIA, status="ok", message="media_completed")
 
 
