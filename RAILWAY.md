@@ -13,7 +13,7 @@ No servico `web`, configure:
 - `POSTHUB_INLINE_WORKER=0`
 - `DATABASE_URL=${{Postgres.DATABASE_URL}}` ou a URL do PostgreSQL do projeto
 - `ENCRYPTION_KEY_B64`, `JWT_SECRET`, `SESSION_SECRET`, `POSTHUB_ADMIN_*`
-- `BASE_URL=https://seu-dominio-publico`
+- `BASE_URL=https://web-production-66f10.up.railway.app`
 
 No servico `worker`, configure as mesmas variaveis de aplicacao, inclusive `DATABASE_URL` e `ENCRYPTION_KEY_B64`.
 
