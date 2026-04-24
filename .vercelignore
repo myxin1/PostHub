@@ -2,7 +2,11 @@ backend/.venv/
 backend/.pyuserbase/
 **/__pycache__/
 *.pyc
+.env
+.env.local
+.env.vercel
 deploy.sh
+deploy.ps1
 *.db
 *.log
 backend/.env
