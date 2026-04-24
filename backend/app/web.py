@@ -7002,7 +7002,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
           <div>
             <div style="font-size:13px;font-weight:700;margin-bottom:6px">URL para agendar</div>
             <textarea readonly style="min-height:68px;font-size:12px;background:var(--surface2)">{html.escape(worker_tick_url)}</textarea>
-            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Agende uma chamada GET a cada 1 minuto em um provedor externo como cron-job.org, EasyCron, GitHub Actions, Pipedream ou Uptime Kuma.</div>
+            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Agende uma chamada GET a cada 1 minuto em um provedor externo como cron-job.org, EasyCron, Pipedream ou Uptime Kuma. Neste repositório tamb&#233;m existe um workflow pronto do GitHub Actions para rodar a cada 5 minutos.</div>
           </div>
           <div>
             <div style="font-size:13px;font-weight:700;margin-bottom:6px">Header obrigat&#243;rio</div>
@@ -7019,7 +7019,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
           </div>
         </div>
         <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.6">
-          Cada chamada do worker processa a fila em loop por at&#233; 50 segundos. Nos novos posts, o pipeline tamb&#233;m ficou mais curto e n&#227;o cria mais a etapa separada de m&#237;dia.
+          Cada chamada do worker processa a fila em loop por at&#233; 50 segundos. Nos novos posts, o pipeline tamb&#233;m ficou mais curto e n&#227;o cria mais a etapa separada de m&#237;dia. Para usar o workflow do GitHub Actions, defina os secrets <code>POSTHUB_WORKER_TICK_URL</code> e <code>POSTHUB_CRON_SECRET</code>.
         </div>
       </div>
     </details>

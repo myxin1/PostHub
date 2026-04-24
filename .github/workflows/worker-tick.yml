@@ -1,0 +1,27 @@
+name: PostHUB Worker Tick
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate required secrets
+        env:
+          POSTHUB_WORKER_TICK_URL: ${{ secrets.POSTHUB_WORKER_TICK_URL }}
+          POSTHUB_CRON_SECRET: ${{ secrets.POSTHUB_CRON_SECRET }}
+        run: |
+          test -n "$POSTHUB_WORKER_TICK_URL" || { echo "Missing secret: POSTHUB_WORKER_TICK_URL"; exit 1; }
+          test -n "$POSTHUB_CRON_SECRET" || { echo "Missing secret: POSTHUB_CRON_SECRET"; exit 1; }
+
+      - name: Trigger worker tick
+        env:
+          POSTHUB_WORKER_TICK_URL: ${{ secrets.POSTHUB_WORKER_TICK_URL }}
+          POSTHUB_CRON_SECRET: ${{ secrets.POSTHUB_CRON_SECRET }}
+        run: |
+          curl --fail --show-error --silent \
+            -H "Authorization: Bearer ${POSTHUB_CRON_SECRET}" \
+            "${POSTHUB_WORKER_TICK_URL}"
