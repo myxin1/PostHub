@@ -11,7 +11,7 @@ beautifulsoup4
 feedparser
 pillow
 python-multipart
-google-generativeai
+google-genai
 openai
 authlib
 itsdangerous
