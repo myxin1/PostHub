@@ -41,7 +41,14 @@ def _raise_wordpress_error(prefix: str, resp: httpx.Response) -> None:
     if resp.status_code == 401:
         raise WordPressError("invalid_wordpress_credentials")
     if resp.status_code == 403:
-        raise WordPressError("insufficient_wp_permissions")
+        try:
+            data = resp.json()
+            code = str(data.get("code") or "")
+            msg = str(data.get("message") or "")
+            extra = f":{code}:{msg}" if (code or msg) else ""
+        except Exception:
+            extra = ""
+        raise WordPressError(f"insufficient_wp_permissions{extra[:200]}")
     detail = (resp.text or "").strip().replace("\n", " ")
     raise WordPressError(f"{prefix}:{resp.status_code}:{detail[:200]}")
 

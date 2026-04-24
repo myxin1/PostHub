@@ -1582,6 +1582,14 @@ def run_worker_tick(*, worker_id: str, user_id: str | None = None, profile_id: s
                 j.last_error = str(e)
                 j.locked_at = None
                 j.locked_by = None
+                _wp_terminal = (
+                    isinstance(e, WordPressError)
+                    and (
+                        str(e).startswith("invalid_wordpress_credentials")
+                        or str(e).startswith("insufficient_wp_permissions")
+                        or str(e).startswith("missing_wordpress_integration")
+                    )
+                )
                 if isinstance(e, GeminiError) and str(e).startswith("rate_limited:"):
                     try:
                         secs = int(str(e).split(":", 1)[1])
@@ -1589,6 +1597,10 @@ def run_worker_tick(*, worker_id: str, user_id: str | None = None, profile_id: s
                         secs = 30
                     j.status = JobStatus.queued
                     j.run_at = datetime.utcnow() + timedelta(seconds=max(5, secs))
+                elif _wp_terminal:
+                    # Auth failures won't self-heal — fail immediately without retrying
+                    j.attempts = j.max_attempts
+                    j.status = JobStatus.failed
                 else:
                     j.attempts = int(j.attempts) + 1
                     if j.attempts >= j.max_attempts:

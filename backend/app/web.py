@@ -8147,6 +8147,12 @@ def _translate_error(code: str) -> tuple[str, str, str]:
             "A URL base, o usuário ou a Senha de Aplicativo do WordPress estão incorretos ou vazios. Acesse as integrações do bot, edite o WordPress e preencha todos os campos corretamente.",
             "/app/bot",
         )
+    if "insufficient_wp_permissions" in c:
+        return (
+            "Sem permissão para publicar no WordPress (403)",
+            "O usuário WordPress não tem permissão de Autor ou Editor. No WordPress vá em Usuários → edite o usuário → altere o Perfil para 'Autor' ou 'Editor'. Se o perfil já estiver correto, gere uma nova Senha de Aplicativo e atualize nas integrações.",
+            "/app/bot",
+        )
     if "post_create_failed:401" in c or "401" in c:
         return (
             "Autenticação WordPress recusada (HTTP 401)",
