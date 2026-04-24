@@ -9,7 +9,7 @@ import httpx
 
 from app.config import settings
 
-WORDPRESS_USER_AGENT = "PostHUB/1.0 (+https://posthub-three.vercel.app)"
+WORDPRESS_USER_AGENT = "PostHUB/1.0"
 
 
 class WordPressError(Exception):
@@ -37,6 +37,15 @@ def _client(username: str, app_password: str, verify: bool | str) -> httpx.Clien
     )
 
 
+def _raise_wordpress_error(prefix: str, resp: httpx.Response) -> None:
+    if resp.status_code == 401:
+        raise WordPressError("invalid_wordpress_credentials")
+    if resp.status_code == 403:
+        raise WordPressError("insufficient_wp_permissions")
+    detail = (resp.text or "").strip().replace("\n", " ")
+    raise WordPressError(f"{prefix}:{resp.status_code}:{detail[:200]}")
+
+
 def upload_media(
     *,
     base_url: str,
@@ -52,11 +61,13 @@ def upload_media(
         "Content-Type": content_type,
     }
     verify = False if settings.http_insecure_skip_verify else certifi.where()
-    with _client(username, app_password, verify) as client:
-        resp = client.post(url, headers=headers, content=data)
+    try:
+        with _client(username, app_password, verify) as client:
+            resp = client.post(url, headers=headers, content=data)
+    except httpx.HTTPError as exc:
+        raise WordPressError(f"wordpress_connection_failed:{str(exc)[:200]}") from exc
     if resp.status_code >= 400:
-        detail = (resp.text or "").strip().replace("\n", " ")
-        raise WordPressError(f"media_upload_failed:{resp.status_code}:{detail[:200]}")
+        _raise_wordpress_error("media_upload_failed", resp)
     media = resp.json()
     media_id = media.get("id")
     if not media_id:
@@ -85,11 +96,13 @@ def create_post(
     if categories:
         payload["categories"] = categories
     verify = False if settings.http_insecure_skip_verify else certifi.where()
-    with _client(username, app_password, verify) as client:
-        resp = client.post(url, json=payload)
+    try:
+        with _client(username, app_password, verify) as client:
+            resp = client.post(url, json=payload)
+    except httpx.HTTPError as exc:
+        raise WordPressError(f"wordpress_connection_failed:{str(exc)[:200]}") from exc
     if resp.status_code >= 400:
-        detail = (resp.text or "").strip().replace("\n", " ")
-        raise WordPressError(f"post_create_failed:{resp.status_code}:{detail[:200]}")
+        _raise_wordpress_error("post_create_failed", resp)
     post = resp.json()
     post_id = post.get("id")
     if not post_id:
@@ -119,11 +132,13 @@ def update_post(
     if categories is not None:
         payload["categories"] = categories
     verify = False if settings.http_insecure_skip_verify else certifi.where()
-    with _client(username, app_password, verify) as client:
-        resp = client.post(url, json=payload)
+    try:
+        with _client(username, app_password, verify) as client:
+            resp = client.post(url, json=payload)
+    except httpx.HTTPError as exc:
+        raise WordPressError(f"wordpress_connection_failed:{str(exc)[:200]}") from exc
     if resp.status_code >= 400:
-        detail = (resp.text or "").strip().replace("\n", " ")
-        raise WordPressError(f"post_update_failed:{resp.status_code}:{detail[:200]}")
+        _raise_wordpress_error("post_update_failed", resp)
     post = resp.json()
     updated_id = post.get("id") or post_id
     return WordPressPostResult(post_id=int(updated_id), link=post.get("link"))
@@ -135,11 +150,13 @@ def delete_post(*, base_url: str, username: str, app_password: str, post_id: int
     params: dict[str, Any] = {}
     if force:
         params["force"] = "true"
-    with _client(username, app_password, verify) as client:
-        resp = client.delete(url, params=params)
+    try:
+        with _client(username, app_password, verify) as client:
+            resp = client.delete(url, params=params)
+    except httpx.HTTPError as exc:
+        raise WordPressError(f"wordpress_connection_failed:{str(exc)[:200]}") from exc
     if resp.status_code >= 400:
-        detail = (resp.text or "").strip().replace("\n", " ")
-        raise WordPressError(f"post_delete_failed:{resp.status_code}:{detail[:200]}")
+        _raise_wordpress_error("post_delete_failed", resp)
 
 
 def list_categories(*, base_url: str, username: str, app_password: str) -> list[dict[str, Any]]:
@@ -148,15 +165,17 @@ def list_categories(*, base_url: str, username: str, app_password: str) -> list[
     out: list[dict[str, Any]] = []
     page = 1
     while True:
-        with _client(username, app_password, verify) as client:
-            resp = client.get(url, params={"per_page": 100, "page": page})
+        try:
+            with _client(username, app_password, verify) as client:
+                resp = client.get(url, params={"per_page": 100, "page": page})
+        except httpx.HTTPError as exc:
+            raise WordPressError(f"wordpress_connection_failed:{str(exc)[:200]}") from exc
         if resp.status_code == 400 and "rest_invalid_param" in resp.text:
             break
         if resp.status_code == 400 and "rest_post_invalid_page_number" in resp.text:
             break
         if resp.status_code >= 400:
-            detail = (resp.text or "").strip().replace("\n", " ")
-            raise WordPressError(f"categories_list_failed:{resp.status_code}:{detail[:200]}")
+            _raise_wordpress_error("categories_list_failed", resp)
         items = resp.json() or []
         if not items:
             break
@@ -175,17 +194,22 @@ def get_or_create_tag_id(*, base_url: str, username: str, app_password: str, tag
         raise WordPressError("tag_name_empty")
     verify = False if settings.http_insecure_skip_verify else certifi.where()
     search_url = urljoin(base_url.rstrip("/") + "/", "wp-json/wp/v2/tags")
-    with _client(username, app_password, verify) as client:
-        resp = client.get(search_url, params={"search": name, "per_page": 100})
+    try:
+        with _client(username, app_password, verify) as client:
+            resp = client.get(search_url, params={"search": name, "per_page": 100})
+    except httpx.HTTPError as exc:
+        raise WordPressError(f"wordpress_connection_failed:{str(exc)[:200]}") from exc
     if resp.status_code >= 400:
-        detail = (resp.text or "").strip().replace("\n", " ")
-        raise WordPressError(f"tag_search_failed:{resp.status_code}:{detail[:200]}")
+        _raise_wordpress_error("tag_search_failed", resp)
     items = resp.json() or []
     for t in items:
         if isinstance(t, dict) and str(t.get("name", "")).strip().lower() == name.lower() and t.get("id"):
             return int(t["id"])
-    with _client(username, app_password, verify) as client:
-        resp2 = client.post(search_url, json={"name": name})
+    try:
+        with _client(username, app_password, verify) as client:
+            resp2 = client.post(search_url, json={"name": name})
+    except httpx.HTTPError as exc:
+        raise WordPressError(f"wordpress_connection_failed:{str(exc)[:200]}") from exc
     if resp2.status_code >= 400:
         try:
             data = resp2.json()
@@ -195,8 +219,7 @@ def get_or_create_tag_id(*, base_url: str, username: str, app_password: str, tag
             term_id = (data.get("data") or {}).get("term_id")
             if term_id:
                 return int(term_id)
-        detail = (resp2.text or "").strip().replace("\n", " ")
-        raise WordPressError(f"tag_create_failed:{resp2.status_code}:{detail[:200]}")
+        _raise_wordpress_error("tag_create_failed", resp2)
     created = resp2.json()
     if not isinstance(created, dict) or not created.get("id"):
         raise WordPressError("tag_create_missing_id")

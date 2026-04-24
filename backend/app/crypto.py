@@ -4,6 +4,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -15,8 +16,8 @@ class CryptoError(Exception):
 
 
 def _key_file_path() -> str:
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    return os.path.join(base_dir, ".posthub_key")
+    base_dir = Path(settings.posthub_data_dir or os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    return str((base_dir / ".posthub_key").resolve())
 
 
 def _load_key() -> bytes:

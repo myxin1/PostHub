@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 
 from app.models import Job, JobLog, JobStatus
 
@@ -106,6 +106,16 @@ def get_due_job(db, *, worker_id: str, user_id: str | None = None, profile_id: s
     except Exception:
         pass  # não bloqueia seleção do próximo job
 
+    job_priority = case(
+        (Job.type == JOB_PUBLISH_WP, 0),
+        (Job.type == JOB_FACEBOOK_PUBLISH, 1),
+        (Job.type == JOB_AI, 2),
+        (Job.type == JOB_MEDIA, 3),
+        (Job.type == JOB_CLEAN, 4),
+        (Job.type == JOB_COLLECT, 5),
+        else_=9,
+    )
+
     job = db.scalar(
         select(Job)
         .where(
@@ -115,7 +125,7 @@ def get_due_job(db, *, worker_id: str, user_id: str | None = None, profile_id: s
             Job.locked_at.is_(None),
             *scope_filters,
         )
-        .order_by(Job.run_at.asc())
+        .order_by(job_priority.asc(), Job.run_at.asc())
         .limit(1)
         # sem FOR UPDATE SKIP LOCKED — incompatível com pg8000 neste contexto
     )

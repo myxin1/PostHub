@@ -6977,10 +6977,9 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
           <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
             <div style="width:38px;height:38px;border-radius:10px;background:rgba(245,158,11,.16);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">&#9888;</div>
             <div style="flex:1;min-width:260px">
-              <div style="font-size:14px;font-weight:800;color:#f59e0b">Fila em modo serverless</div>
+              <div style="font-size:14px;font-weight:800;color:#f59e0b">Worker externo necessário</div>
               <div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.6">
-                Neste deploy o worker inline est&#225; desligado. Sem cron externo, a fila anda melhor com esta tela aberta ou usando o bot&#227;o <b>Rodar agora</b>.
-                No plano Hobby da Vercel, o cron nativo n&#227;o pode rodar a cada minuto.
+                Neste deploy o worker inline est&#225; desligado. Em ambiente serverless, use cron externo ou o bot&#227;o <b>Rodar agora</b>. Em Railway, prefira um servi&#231;o dedicado com <code>python backend/worker_runner.py</code>.
               </div>
             </div>
           </div>
@@ -6990,7 +6989,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
       <summary style="padding:14px 18px">
         <span class="ts-title" style="display:flex;align-items:center;gap:8px">
           <span style="width:24px;height:24px;border-radius:6px;background:rgba(16,185,129,.12);display:inline-flex;align-items:center;justify-content:center">&#9201;</span>
-          Cron externo do worker
+          Worker externo do PostHUB
           <span class="ts-badge" style="color:{'#10b981' if cron_secret_configured else '#ef4444'};border-color:{'rgba(16,185,129,.3)' if cron_secret_configured else 'rgba(239,68,68,.3)'}">
             {'CRON_SECRET ok' if cron_secret_configured else 'CRON_SECRET faltando'}
           </span>
@@ -7002,12 +7001,12 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
           <div>
             <div style="font-size:13px;font-weight:700;margin-bottom:6px">URL para agendar</div>
             <textarea readonly style="min-height:68px;font-size:12px;background:var(--surface2)">{html.escape(worker_tick_url)}</textarea>
-            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Agende uma chamada GET a cada 1 minuto em um provedor externo como cron-job.org, EasyCron, Pipedream ou Uptime Kuma. Neste repositório tamb&#233;m existe um workflow pronto do GitHub Actions para rodar a cada 5 minutos.</div>
+            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Em ambiente serverless, agende uma chamada GET a cada 1 minuto em um provedor externo como cron-job.org, EasyCron, Pipedream ou Uptime Kuma. Em Railway, prefira um servi&#231;o dedicado rodando <code>python backend/worker_runner.py</code>.</div>
           </div>
           <div>
             <div style="font-size:13px;font-weight:700;margin-bottom:6px">Header obrigat&#243;rio</div>
             <textarea readonly style="min-height:68px;font-size:12px;background:var(--surface2)">Authorization: Bearer &lt;CRON_SECRET&gt;</textarea>
-            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Use o valor salvo em <code>CRON_SECRET</code> no Vercel. Quando essa vari&#225;vel existe, o endpoint exige o token no header.</div>
+            <div style="margin-top:8px;font-size:11px;color:var(--muted)">Use o valor salvo em <code>CRON_SECRET</code>. Quando essa vari&#225;vel existe, o endpoint exige o token no header.</div>
           </div>
           <div>
             <div style="font-size:13px;font-weight:700;margin-bottom:6px">Exemplo cURL</div>
@@ -7019,7 +7018,7 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
           </div>
         </div>
         <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.6">
-          Cada chamada do worker processa a fila em loop por at&#233; 50 segundos. Nos novos posts, o pipeline tamb&#233;m ficou mais curto e n&#227;o cria mais a etapa separada de m&#237;dia. Para usar o workflow do GitHub Actions, defina os secrets <code>POSTHUB_WORKER_TICK_URL</code> e <code>POSTHUB_CRON_SECRET</code>.
+          Cada chamada do worker processa a fila em loop por at&#233; 50 segundos. Nos novos posts, o pipeline tamb&#233;m ficou mais curto e n&#227;o cria mais a etapa separada de m&#237;dia. Em Railway, o ideal &#233; rodar um worker dedicado com <code>python backend/worker_runner.py</code>. Para usar o workflow do GitHub Actions, defina os secrets <code>POSTHUB_WORKER_TICK_URL</code> e <code>POSTHUB_CRON_SECRET</code>.
         </div>
       </div>
     </details>

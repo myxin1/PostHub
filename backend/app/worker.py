@@ -12,7 +12,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.crypto import CryptoError, decrypt_json
@@ -369,7 +369,46 @@ def _handle_collect(db, job: Job):
     except Exception:
         pass
     profile_cfg = dict(profile.publish_config_json or {})
-    if profile.active and not profile_cfg.get("run_stopped_at") and limit and created < limit:
+    open_posts = int(
+        db.scalar(
+            select(func.count()).select_from(Post).where(
+                Post.profile_id == profile_id,
+                Post.status.in_([PostStatus.pending, PostStatus.processing]),
+            )
+        )
+        or 0
+    )
+    keep_collect_jobs = 0 if open_posts >= limit else 1
+    removed_collect_jobs = _prune_collect_backlog(db, profile_id=profile_id, keep=keep_collect_jobs)
+    if removed_collect_jobs:
+        log_event(
+            db,
+            user_id=job.user_id,
+            profile_id=profile_id,
+            stage=JOB_COLLECT,
+            status="info",
+            message="collect_backlog_pruned",
+            meta={"removed": removed_collect_jobs, "open_posts": open_posts, "limit": limit},
+        )
+    queued_collect_jobs = int(
+        db.scalar(
+            select(func.count()).select_from(Job).where(
+                Job.profile_id == profile_id,
+                Job.type == JOB_COLLECT,
+                Job.status == JobStatus.queued,
+            )
+        )
+        or 0
+    )
+    remaining_needed = max(0, int(limit or 0) - open_posts)
+    if (
+        profile.active
+        and not profile_cfg.get("run_stopped_at")
+        and limit
+        and created < limit
+        and remaining_needed > 0
+        and queued_collect_jobs == 0
+    ):
         round_n = int(payload.get("collect_round") or 0)
         if round_n < 10:
             enqueue_job(
@@ -378,7 +417,7 @@ def _handle_collect(db, job: Job):
                 profile_id=profile_id,
                 job_type=JOB_COLLECT,
                 payload={
-                    "limit": int(limit - created),
+                    "limit": int(min(limit - created, remaining_needed)),
                     "interval_minutes": interval_minutes,
                     "respect_schedule": 1 if respect else 0,
                     "collect_round": round_n + 1,
@@ -846,11 +885,23 @@ def _handle_publish_wp(db, job: Job):
         category_name = str(recipe.get("categoria") or "").strip()
         if allowed_categories and category_name not in allowed_categories:
             category_name = default_category
-        cats = list_categories(base_url=creds["base_url"], username=creds["username"], app_password=creds["app_password"])
-        cat_map = {str(c["name"]).strip().lower(): int(c["id"]) for c in cats if c.get("id") and c.get("name")}
-        cat_id = cat_map.get(category_name.strip().lower()) or cat_map.get(default_category.strip().lower())
-        if cat_id:
-            category_ids = [int(cat_id)]
+        try:
+            cats = list_categories(base_url=creds["base_url"], username=creds["username"], app_password=creds["app_password"])
+            cat_map = {str(c["name"]).strip().lower(): int(c["id"]) for c in cats if c.get("id") and c.get("name")}
+            cat_id = cat_map.get(category_name.strip().lower()) or cat_map.get(default_category.strip().lower())
+            if cat_id:
+                category_ids = [int(cat_id)]
+        except WordPressError as _cat_err:
+            log_event(
+                db,
+                user_id=job.user_id,
+                profile_id=job.profile_id,
+                post_id=job.post_id,
+                stage=JOB_PUBLISH_WP,
+                status="warning",
+                message="category_lookup_skipped",
+                meta={"reason": str(_cat_err)[:120]},
+            )
         tags = recipe.get("tags") or []
         names: list[str] = []
         if isinstance(tags, list):
@@ -870,15 +921,28 @@ def _handle_publish_wp(db, job: Job):
     featured_media_id = None
     image_url = _get_output_image_url(outputs, fallback_url=content.lead_image_url)
     if image_url and not skip_wp_image:
-        prepared = download_and_prepare_image(str(image_url))
-        featured_media_id = upload_media(
-            base_url=creds["base_url"],
-            username=creds["username"],
-            app_password=creds["app_password"],
-            filename=prepared.filename,
-            content_type=prepared.content_type,
-            data=prepared.data,
-        )
+        try:
+            prepared = download_and_prepare_image(str(image_url))
+            featured_media_id = upload_media(
+                base_url=creds["base_url"],
+                username=creds["username"],
+                app_password=creds["app_password"],
+                filename=prepared.filename,
+                content_type=prepared.content_type,
+                data=prepared.data,
+            )
+        except Exception as _img_err:
+            log_event(
+                db,
+                user_id=job.user_id,
+                profile_id=job.profile_id,
+                post_id=job.post_id,
+                stage=JOB_PUBLISH_WP,
+                status="warning",
+                message="featured_image_skipped",
+                meta={"reason": str(_img_err)[:160]},
+            )
+            featured_media_id = None
     title = content.title or "Post"
     if isinstance(recipe, dict):
         t = str(recipe.get("title") or "").strip()
@@ -1101,11 +1165,45 @@ def _parse_ai_json(text: str) -> dict:
     raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"\s*```$", "", raw)
     if raw.startswith("{") and raw.endswith("}"):
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return json.loads(_sanitize_json_blob(raw))
     m = re.search(r"\{[\s\S]*\}", raw)
     if not m:
         raise GeminiError("invalid_json")
-    return json.loads(m.group(0))
+    blob = m.group(0)
+    try:
+        return json.loads(blob)
+    except json.JSONDecodeError:
+        return json.loads(_sanitize_json_blob(blob))
+
+
+def _sanitize_json_blob(blob: str) -> str:
+    # Some model outputs include literal control characters inside JSON strings.
+    # Replacing them with spaces preserves the structure well enough for parsing.
+    return re.sub(r"[\x00-\x1F]+", " ", blob or "")
+
+
+def _prune_collect_backlog(db, *, profile_id: str, keep: int = 1) -> int:
+    collect_jobs = list(
+        db.scalars(
+            select(Job)
+            .where(
+                Job.profile_id == profile_id,
+                Job.type == JOB_COLLECT,
+                Job.status == JobStatus.queued,
+            )
+            .order_by(Job.run_at.asc(), Job.created_at.asc())
+        )
+    )
+    removed = 0
+    for job in collect_jobs[max(0, keep):]:
+        db.delete(job)
+        removed += 1
+    if removed:
+        db.flush()
+    return removed
 
 
 def _norm_title(s: str) -> str:
