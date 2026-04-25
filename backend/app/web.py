@@ -460,6 +460,27 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         }}
       }});
 
+      /* ── Source type switcher (URL multi-line vs single-line) ── */
+      window.phSrcTypeChange = function(sel, pid) {{
+        var ta  = document.getElementById('src-ta-' + pid);
+        var lbl = document.getElementById('src-lbl-' + pid);
+        var hint = document.getElementById('src-hint-' + pid);
+        if (!ta) return;
+        if (sel.value === 'URL') {{
+          ta.rows = 3;
+          ta.placeholder = 'https://site.com/receitas/bolos\nhttps://site.com/receitas/tortas\nhttps://site.com/page/2/';
+          ta.style.fontFamily = 'monospace';
+          if (lbl) lbl.textContent = 'URLs (uma por linha)';
+          if (hint) hint.style.display = '';
+        }} else {{
+          ta.rows = 1;
+          ta.placeholder = sel.value === 'RSS' ? 'https://site.com/feed/' : 'Palavra-chave ou tema';
+          ta.style.fontFamily = '';
+          if (lbl) lbl.textContent = sel.value === 'RSS' ? 'URL do feed RSS' : 'Palavra-chave';
+          if (hint) hint.style.display = 'none';
+        }}
+      }};
+
       /* ── Limpar Cache ── */
       window.devLimparCache = function(btn) {{
         if (btn) {{ btn.textContent = 'Limpando...'; btn.disabled = true; }}
@@ -3575,21 +3596,24 @@ def profile_detail(profile_id: str, request: Request, user: User = Depends(get_c
                   <div style="padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);margin-bottom:14px">
                     <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px">Adicionar fonte</div>
                     <form method="post" action="/app/profiles/{_fp_id}/sources/create" {_fp_form_onsubmit}>
-                      <div style="display:grid;grid-template-columns:150px 1fr auto;gap:10px;align-items:flex-end">
+                      <div style="display:grid;grid-template-columns:150px 1fr auto;gap:10px;align-items:flex-start">
                         <div>
                           <label style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block">Tipo</label>
-                          <select name="type" style="margin:0">
+                          <select name="type" style="margin:0" onchange="phSrcTypeChange(this,'{_fp_id}')">
                             <option value="URL">&#127758; URL</option>
                             <option value="RSS">&#128268; RSS</option>
                             <option value="KEYWORD">&#128269; Palavra-chave</option>
                           </select>
                         </div>
                         <div>
-                          <label style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block">Valor</label>
-                          <input name="value" placeholder="https://... ou termo de busca" {_fp_input_required} style="margin:0" />
+                          <label id="src-lbl-{_fp_id}" style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;display:block">URLs (uma por linha)</label>
+                          <textarea id="src-ta-{_fp_id}" name="value" rows="3"
+                            placeholder="https://site.com/receitas/bolos&#10;https://site.com/receitas/tortas&#10;https://site.com/page/2/"
+                            {_fp_input_required} style="margin:0;width:100%;resize:vertical;font-size:13px;font-family:monospace"></textarea>
                         </div>
-                        <button class="btn flat" type="submit" style="height:42px;padding:0 20px;font-size:15px;font-weight:700;letter-spacing:0;{_fp_btn_extra}">+ Adicionar</button>
+                        <button class="btn flat" type="submit" style="height:42px;padding:0 20px;font-size:15px;font-weight:700;letter-spacing:0;margin-top:22px;{_fp_btn_extra}">+ Adicionar</button>
                       </div>
+                      <div id="src-hint-{_fp_id}" style="font-size:11px;color:var(--muted);margin-top:6px">&#128161; Cole v&#225;rias URLs de categorias ou p&#225;ginas (uma por linha) — o bot vai alternar entre elas aleatoriamente.</div>
                       {_fp_alert_block}
                     </form>
                   </div>
@@ -6164,10 +6188,23 @@ def source_create(profile_id: str, type: str = Form(...), value: str = Form(...)
         st = SourceType.RSS
     else:
         st = SourceType.KEYWORD
-    s = Source(profile_id=p.id, type=st, value=value.strip(), active=True)
-    db.add(s)
-    db.commit()
-    return RedirectResponse(f"/app/profiles/{p.id}", status_code=status.HTTP_302_FOUND)
+    # For URL type, support multiple lines (one URL per line)
+    if st == SourceType.URL:
+        urls = [line.strip() for line in value.splitlines() if line.strip()]
+        urls = [u for u in urls if u.startswith("http")]
+    else:
+        urls = [value.strip()]
+    added = 0
+    existing = {s.value for s in db.scalars(select(Source).where(Source.profile_id == p.id, Source.type == st))}
+    for url in urls:
+        if not url or url in existing:
+            continue
+        db.add(Source(profile_id=p.id, type=st, value=url, active=True))
+        existing.add(url)
+        added += 1
+    if added:
+        db.commit()
+    return RedirectResponse(f"/app/profiles/{p.id}?tab=fontes", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/app/profiles/{profile_id}/sources/{source_id}/delete", include_in_schema=False)

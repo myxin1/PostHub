@@ -141,6 +141,54 @@ def _is_listing_url(url: str) -> bool:
     )
 
 
+def discover_deep_start_links(*, raw_html: str, base_url: str, max_links: int = 30) -> list[str]:
+    """Return category/pagination/archive URLs found on a page to use as deeper starting points.
+
+    Calling code should shuffle the result and pick one randomly, then scrape it for recipe links
+    instead of always scraping the same homepage.
+    """
+    soup = BeautifulSoup(raw_html or "", "html.parser")
+    base = urlparse(base_url)
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for a in soup.find_all("a", href=True):
+        href = str(a.get("href") or "").strip()
+        if not href or href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:"):
+            continue
+        abs_url = urljoin(base_url, href)
+        u = urlparse(abs_url)
+        if u.scheme not in ("http", "https"):
+            continue
+        if base.netloc and u.netloc and u.netloc != base.netloc:
+            continue
+        clean = _normalize_url(u.geturl())
+        if clean in seen:
+            continue
+        if is_probably_homepage(url=clean):
+            continue
+        path = (u.path or "").lower()
+        query = (u.query or "").lower()
+        # Pagination patterns: /page/2/, /p/3/, ?page=2, ?paged=2
+        is_paginated = bool(
+            re.search(r"/page/\d+/?$", path)
+            or re.search(r"/p/\d+/?$", path)
+            or re.search(r"[?&]paged?=\d+", query)
+        )
+        # Category/tag/listing pages that contain multiple recipes
+        is_category = bool(
+            re.search(r"/(categoria|categorias|category|tag|tags|arquivo|archive|cardapio)/", path)
+            or re.search(r"/(receitas|recipes)/[^/]+/?$", path)
+        )
+        if is_paginated or is_category:
+            seen.add(clean)
+            out.append(clean)
+            if len(out) >= max_links:
+                break
+
+    return out
+
+
 def _iter_jsonld_objects(raw_html: str) -> list[object]:
     soup = BeautifulSoup(raw_html or "", "html.parser")
     out: list[object] = []

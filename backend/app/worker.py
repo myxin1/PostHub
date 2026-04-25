@@ -38,7 +38,7 @@ from app.services.gemini import GeminiError, generate_text as gemini_generate_te
 from app.services.openai_service import OpenAIError, generate_text as openai_generate_text
 from app.services.images import download_and_prepare_image
 from app.services.rss import fetch_rss_items, fetch_site_feed_items, keyword_to_google_news_rss
-from app.services.scrape import discover_recipe_links, is_probably_homepage, looks_like_recipe_page, scrape_url
+from app.services.scrape import discover_deep_start_links, discover_recipe_links, is_probably_homepage, looks_like_recipe_page, scrape_url
 from app.services.wordpress import WordPressError, create_post, delete_post, get_or_create_tag_id, list_categories, upload_media
 
 
@@ -254,6 +254,7 @@ def _handle_collect(db, job: Job):
             )
         return found
 
+    random.shuffle(sources)  # randomize source order each run
     for source in sources:
         if limit and created >= limit:
             break
@@ -319,7 +320,29 @@ def _handle_collect(db, job: Job):
                 if rss_used and (not limit or created >= limit):
                     continue
 
-            picked_links = discover_recipe_links(raw_html=scraped.raw_html, base_url=scraped.canonical_url, max_links=220)
+            # Deep exploration: find category/pagination links and randomly start
+            # from one of them instead of always the same homepage links.
+            deep_starts = discover_deep_start_links(raw_html=scraped.raw_html, base_url=scraped.canonical_url)
+            explore_raw = scraped.raw_html
+            explore_base = scraped.canonical_url
+            if deep_starts and time.perf_counter() < _collect_deadline:
+                random.shuffle(deep_starts)
+                for deep_url in deep_starts[:4]:
+                    if time.perf_counter() >= _collect_deadline:
+                        break
+                    try:
+                        deep_scraped = scrape_url(deep_url)
+                        explore_raw = deep_scraped.raw_html
+                        explore_base = deep_scraped.canonical_url
+                        break
+                    except Exception:
+                        continue
+
+            picked_links = discover_recipe_links(raw_html=explore_raw, base_url=explore_base, max_links=220)
+            # Also include links from the original page for variety
+            if explore_base != scraped.canonical_url:
+                extra = discover_recipe_links(raw_html=scraped.raw_html, base_url=scraped.canonical_url, max_links=80)
+                picked_links = list({u: None for u in picked_links + extra}.keys())
             if picked_links:
                 random.shuffle(picked_links)
             max_attempts = 220 if not limit else max(120, limit * 12)
