@@ -36,12 +36,12 @@ jobs:
 
       - name: Deploy ${{ matrix.service }}
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: |
-          if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "RAILWAY_TOKEN secret missing."
-            echo "Create a Railway Project Token in Project Settings > Tokens"
-            echo "and save it in GitHub as the repository secret RAILWAY_TOKEN."
+          if [ -z "$RAILWAY_API_TOKEN" ]; then
+            echo "RAILWAY_API_TOKEN secret missing."
+            echo "Add a Railway account or workspace token in GitHub secrets"
+            echo "using the repository secret name RAILWAY_API_TOKEN."
             exit 0
           fi
           railway up --ci \
