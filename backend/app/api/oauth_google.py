@@ -37,7 +37,7 @@ def _callback_uri(request: Request) -> str:
     if base:
         return f"{base}/app/auth/google/callback"
     uri = str(request.url_for("google_callback"))
-    # Vercel terminates SSL at the edge; ensure https
+    # Reverse proxies often terminate SSL at the edge; ensure https
     if uri.startswith("http://"):
         uri = "https://" + uri[len("http://"):]
     return uri

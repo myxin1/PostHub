@@ -14,7 +14,7 @@ class Base(DeclarativeBase):
 
 
 def _build_engine(raw: str):
-    """Use pg8000 (pure Python) for PostgreSQL so Vercel Lambda has no binary deps.
+    """Use pg8000 (pure Python) for PostgreSQL so deploys avoid binary deps.
     pg8000 doesn't accept ?sslmode=require — SSL is passed via connect_args instead."""
     import re
     _ensure_sqlite_parent(raw)
@@ -70,4 +70,3 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, clas
 
 def db_session() -> Session:
     return SessionLocal()
-

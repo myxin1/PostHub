@@ -78,7 +78,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/worker/tick", include_in_schema=False)
     async def _worker_tick(request: Request):
-        """Endpoint chamado pelo Vercel Cron a cada minuto."""
+        """Endpoint chamado por cron externo ou automações agendadas."""
         secret = os.getenv("CRON_SECRET", "")
         if secret and request.headers.get("authorization") != f"Bearer {secret}":
             return JSONResponse({"error": "unauthorized"}, status_code=401)

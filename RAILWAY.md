@@ -1,6 +1,6 @@
 # Railway Deploy
 
-Este projeto fica mais estavel no Railway do que na Vercel porque o worker pode rodar como processo persistente, sem depender de cron externo para empurrar a fila.
+Este projeto fica mais estavel no Railway porque o worker pode rodar como processo persistente, sem depender de cron externo para empurrar a fila.
 
 ## Arquitetura recomendada
 
