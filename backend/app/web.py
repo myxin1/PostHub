@@ -882,6 +882,26 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
 
       var _botStreak=0, _botDelay=8000, _botTid=null;
       function _scheduleBotPoll(){{ _botTid=setTimeout(_pollBotStatus,_botDelay); }}
+      function _updateBotCard(botId, isRunning) {{
+        var wrap = document.getElementById('bot-cards-wrap');
+        if (!wrap) return;
+        var card = wrap.querySelector('[data-bot-id="' + botId + '"]');
+        if (!card) return;
+        var prev = card.getAttribute('data-bot-running');
+        if ((prev === '1') === isRunning) return;
+        card.setAttribute('data-bot-running', isRunning ? '1' : '0');
+        var btnWrap = card.querySelector('div[style*="flex-shrink"]');
+        if (!btnWrap) return;
+        if (isRunning) {{
+          card.style.background = 'rgba(16,185,129,.06)';
+          card.style.border = '2px solid #10b981';
+          btnWrap.innerHTML = '<button type="button" class="btn-running ph-stop-bot-btn" data-bot-id="' + botId + '">&#9632; Parar Bot</button>';
+        }} else {{
+          card.style.background = 'var(--surface2)';
+          card.style.border = '1px solid var(--border)';
+          btnWrap.innerHTML = '<button type="button" class="btn" onclick="openDiagModal(\'' + botId + '\')" style="font-size:13px;padding:8px 18px">&#9658; Iniciar</button>';
+        }}
+      }}
       function _pollBotStatus() {{
         if(document.hidden){{ _scheduleBotPoll(); return; }}
         fetch('/app/robot/status')
@@ -895,24 +915,30 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
                 if (typeof window._phFetchFeed === 'function') window._phFetchFeed();
                 changed=true;
               }}
-              if(prev!==b.is_running) changed=true;
+              if(prev!==b.is_running) {{
+                changed=true;
+                _updateBotCard(b.id, b.is_running);
+              }}
               _prevStatus[b.id] = b.is_running;
             }});
             if(changed){{ _botStreak=0; _botDelay=8000; }}
             else{{ _botStreak++; if(_botStreak>=3) _botDelay=Math.min(30000,_botDelay+6000); }}
             var anyRunning=(bots||[]).some(function(b){{return b.is_running;}});
             if(anyRunning) _scheduleBotPoll();
+            else _scheduleBotPoll();
           }})
           .catch(function(){{}});
       }}
 
-      // Initialize state on page load
+      // Initialize state on page load — always start polling
       fetch('/app/robot/status')
         .then(function(r){{ return r.ok ? r.json() : []; }})
         .then(function(bots) {{
-          (bots || []).forEach(function(b) {{ _prevStatus[b.id] = b.is_running; }});
-          var anyRunning = (bots || []).some(function(b){{ return b.is_running; }});
-          if (anyRunning) _scheduleBotPoll();
+          (bots || []).forEach(function(b) {{
+            _prevStatus[b.id] = b.is_running;
+            _updateBotCard(b.id, b.is_running);
+          }});
+          _scheduleBotPoll();
         }}).catch(function(){{}});
     }})();
 
