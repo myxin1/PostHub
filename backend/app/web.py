@@ -2584,11 +2584,13 @@ def _revive_profile_queue(db, *, profile_id: str, force_now: bool = False) -> in
     ).fetchall()
     # Build dict: post_id -> job_type of most recent success
     last_ok_map: dict[str, str] = {}
+    last_ok_ts: dict[str, str] = {}
     for row in last_ok_rows:
         pid, jtype, ts = row[0], row[1], row[2]
-        if pid not in last_ok_map or (ts and ts > last_ok_map.get(pid + "_ts", "")):
+        ts_str = str(ts or "")
+        if pid not in last_ok_map or ts_str > last_ok_ts.get(pid, ""):
             last_ok_map[pid] = jtype
-            last_ok_map[pid + "_ts"] = str(ts or "")
+            last_ok_ts[pid] = ts_str
 
     for p in orphan_posts:
         if active_counts.get(p.id, 0) > 0:
