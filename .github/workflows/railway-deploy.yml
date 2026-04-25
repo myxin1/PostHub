@@ -1,0 +1,56 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: railway-production
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_PROJECT_ID: c3ad83a1-bb6d-44af-8fc1-5cf355c7280c
+  RAILWAY_ENVIRONMENT_NAME: production
+
+jobs:
+  deploy:
+    if: ${{ secrets.RAILWAY_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [web, worker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy ${{ matrix.service }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: >
+          railway up --ci
+          --service "${{ matrix.service }}"
+          --environment "$RAILWAY_ENVIRONMENT_NAME"
+          --project "$RAILWAY_PROJECT_ID"
+          --message "github:${{ github.sha }}"
+
+  missing-token:
+    if: ${{ secrets.RAILWAY_TOKEN == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Missing Railway token
+        run: |
+          echo "RAILWAY_TOKEN secret missing."
+          echo "Create a Railway Project Token in Project Settings > Tokens"
+          echo "and save it in GitHub as the repository secret RAILWAY_TOKEN."
