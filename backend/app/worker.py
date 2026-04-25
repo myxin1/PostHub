@@ -148,6 +148,7 @@ def _handle_collect(db, job: Job):
     skipped_duplicate = 0
     skipped_non_recipe = 0
     skipped_error = 0
+    _collect_deadline = time.perf_counter() + 480  # hard stop after 8 min
     base_run_at = datetime.utcnow()
     base_payload = str(payload.get("base_run_at_utc") or "").strip()
     if base_payload:
@@ -256,11 +257,15 @@ def _handle_collect(db, job: Job):
     for source in sources:
         if limit and created >= limit:
             break
+        if time.perf_counter() >= _collect_deadline:
+            break
         if source.type == SourceType.RSS:
             items = fetch_rss_items(source.value, limit=50)
             random.shuffle(items)
             for item in items:
                 if limit and created >= limit:
+                    break
+                if time.perf_counter() >= _collect_deadline:
                     break
                 try:
                     s = scrape_url(item.url)
@@ -277,6 +282,8 @@ def _handle_collect(db, job: Job):
             random.shuffle(items)
             for item in items:
                 if limit and created >= limit:
+                    break
+                if time.perf_counter() >= _collect_deadline:
                     break
                 try:
                     s = scrape_url(item.url)
@@ -319,6 +326,8 @@ def _handle_collect(db, job: Job):
             attempts = 0
             for u in picked_links:
                 if limit and created >= limit:
+                    break
+                if time.perf_counter() >= _collect_deadline:
                     break
                 if fast_publish_enabled and not rss_used and (time.perf_counter() - source_started_at) >= rss_fallback_after_seconds:
                     rss_used = _collect_from_site_rss(
@@ -1550,6 +1559,8 @@ def run_worker_tick(*, worker_id: str, user_id: str | None = None, profile_id: s
         if not job:
             db.commit()
             return False
+        # Commit the running lock immediately so concurrent workers (dedicated + cron tick) see it
+        db.commit()
         try:
             log_event(
                 db,

@@ -74,7 +74,7 @@ def schedule_retry(job: Job) -> datetime:
     return datetime.utcnow() + timedelta(seconds=delay_seconds)
 
 
-_STALE_LOCK_MINUTES = 3  # libera locks travados após 3 min
+_STALE_LOCK_MINUTES = 10  # libera locks travados após 10 min (collect pode levar vários min)
 
 
 def get_due_job(db, *, worker_id: str, user_id: str | None = None, profile_id: str | None = None) -> Job | None:
