@@ -18,7 +18,6 @@ env:
 
 jobs:
   deploy:
-    if: ${{ secrets.RAILWAY_TOKEN != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -38,19 +37,15 @@ jobs:
       - name: Deploy ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: >
-          railway up --ci
-          --service "${{ matrix.service }}"
-          --environment "$RAILWAY_ENVIRONMENT_NAME"
-          --project "$RAILWAY_PROJECT_ID"
-          --message "github:${{ github.sha }}"
-
-  missing-token:
-    if: ${{ secrets.RAILWAY_TOKEN == '' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Missing Railway token
         run: |
-          echo "RAILWAY_TOKEN secret missing."
-          echo "Create a Railway Project Token in Project Settings > Tokens"
-          echo "and save it in GitHub as the repository secret RAILWAY_TOKEN."
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_TOKEN secret missing."
+            echo "Create a Railway Project Token in Project Settings > Tokens"
+            echo "and save it in GitHub as the repository secret RAILWAY_TOKEN."
+            exit 0
+          fi
+          railway up --ci \
+            --service "${{ matrix.service }}" \
+            --environment "$RAILWAY_ENVIRONMENT_NAME" \
+            --project "$RAILWAY_PROJECT_ID" \
+            --message "github:${{ github.sha }}"
