@@ -68,6 +68,93 @@ from app.services.wordpress import WordPressError, delete_post
 router = APIRouter(tags=["web"])
 
 
+def _kick_tick_and_redirect(*, bot_id: str, target_url: str, title: str = "Iniciando robô") -> HTMLResponse:
+    """Serverless bridge: dispara um tick manual antes de levar o usuário para Posts."""
+    page = f"""<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(title)}</title>
+  <meta http-equiv="refresh" content="70;url={html.escape(target_url, quote=True)}" />
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #0f172a;
+      --card: rgba(17,24,39,.9);
+      --border: rgba(148,163,184,.22);
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #8b5cf6;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: Inter, system-ui, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(139,92,246,.22), transparent 38%),
+        linear-gradient(180deg, #0b1120, var(--bg));
+      color: var(--text);
+    }}
+    .card {{
+      width: min(520px, 100%);
+      padding: 28px 24px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      box-shadow: 0 24px 70px rgba(15,23,42,.45);
+    }}
+    .spinner {{
+      width: 44px;
+      height: 44px;
+      border-radius: 999px;
+      border: 4px solid rgba(139,92,246,.18);
+      border-top-color: var(--accent);
+      animation: spin .9s linear infinite;
+      margin-bottom: 18px;
+    }}
+    h1 {{ margin: 0 0 10px; font-size: 22px; }}
+    p {{ margin: 0; color: var(--muted); line-height: 1.6; }}
+    a {{ color: #c4b5fd; text-decoration: none; font-weight: 600; }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1>{html.escape(title)}</h1>
+    <p>Estamos liberando a fila e iniciando o processamento desta rodada. Você será levado para a tela de Posts assim que o primeiro tick terminar.</p>
+    <p style="margin-top:14px"><a href="{html.escape(target_url, quote=True)}">Ir para Posts agora</a></p>
+  </div>
+  <script>
+    (function() {{
+      var fd = new FormData();
+      fd.append('bot_id', {json.dumps(bot_id)});
+      var target = {json.dumps(target_url)};
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function() {{ controller.abort(); }}, 56000);
+      fetch('/app/robot/tick-now', {{
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+        signal: controller.signal
+      }})
+        .catch(function() {{}})
+        .finally(function() {{
+          clearTimeout(timeoutId);
+          window.location.replace(target);
+        }});
+    }})();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(page)
+
+
 def _user_zoneinfo(user: User) -> ZoneInfo:
     tz_name = (user.timezone or "").strip()
     if not tz_name or tz_name.upper() == "UTC":
@@ -2653,6 +2740,7 @@ def robot_start(
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    worker_inline_enabled = os.getenv("POSTHUB_INLINE_WORKER", "1") != "0"
     if bot_id:
         bot = db.scalar(select(AutomationProfile).where(AutomationProfile.id == bot_id, AutomationProfile.user_id == user.id))
         if not bot:
@@ -2690,7 +2778,10 @@ def robot_start(
     if (queued_jobs + running_jobs + pending_posts + processing_posts) > 0:
         db.commit()
         msg = "Fila retomada e em andamento." if revived else "Postagens em andamento. Acompanhe em Posts."
-        return RedirectResponse(f"/app/posts?msg={quote_plus(msg)}", status_code=status.HTTP_302_FOUND)
+        target_url = f"/app/posts?msg={quote_plus(msg)}"
+        if not worker_inline_enabled:
+            return _kick_tick_and_redirect(bot_id=bot.id, target_url=target_url, title="Retomando fila")
+        return RedirectResponse(target_url, status_code=status.HTTP_302_FOUND)
     cfg = bot.schedule_config_json or {}
     limit = int(cfg.get("posts_per_day") or 15)
     respect = int(cfg.get("respect_schedule") or 0) == 1
@@ -2708,6 +2799,8 @@ def robot_start(
         payload={"limit": limit, "interval_minutes": interval_minutes, "respect_schedule": 1 if respect else 0},
     )
     db.commit()
+    if not worker_inline_enabled:
+        return _kick_tick_and_redirect(bot_id=bot.id, target_url="/app/posts")
     return RedirectResponse("/app/posts", status_code=status.HTTP_302_FOUND)
 
 
