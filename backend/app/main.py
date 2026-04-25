@@ -31,6 +31,8 @@ from app.web import router as web_router
 def create_app() -> FastAPI:
     app = FastAPI(title="PostHub")
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    from starlette.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 

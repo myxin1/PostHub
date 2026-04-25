@@ -2563,19 +2563,37 @@ def _revive_profile_queue(db, *, profile_id: str, force_now: bool = False) -> in
             Post.status.in_([PostStatus.pending, PostStatus.processing]),
         )
     ))
-    for p in orphan_posts:
-        active = int(db.scalar(
-            select(func.count()).select_from(Job).where(
-                Job.post_id == p.id,
-                Job.status.in_([JobStatus.queued, JobStatus.running]),
-            )
-        ) or 0)
-        if active:
-            continue
-        last_ok_type = db.scalar(
-            select(Job.type).where(Job.post_id == p.id, Job.status == JobStatus.succeeded)
-            .order_by(Job.updated_at.desc()).limit(1)
+    if not orphan_posts:
+        return did
+
+    # Batch: one query for all active job counts, one for last succeeded type
+    post_ids = [p.id for p in orphan_posts]
+    active_counts = {
+        row[0]: row[1]
+        for row in db.execute(
+            select(Job.post_id, func.count().label("n"))
+            .where(Job.post_id.in_(post_ids), Job.status.in_([JobStatus.queued, JobStatus.running]))
+            .group_by(Job.post_id)
         )
+    }
+    # Last succeeded job type per post (use MAX of updated_at to pick latest)
+    last_ok_rows = db.execute(
+        select(Job.post_id, Job.type, func.max(Job.updated_at).label("t"))
+        .where(Job.post_id.in_(post_ids), Job.status == JobStatus.succeeded)
+        .group_by(Job.post_id, Job.type)
+    ).fetchall()
+    # Build dict: post_id -> job_type of most recent success
+    last_ok_map: dict[str, str] = {}
+    for row in last_ok_rows:
+        pid, jtype, ts = row[0], row[1], row[2]
+        if pid not in last_ok_map or (ts and ts > last_ok_map.get(pid + "_ts", "")):
+            last_ok_map[pid] = jtype
+            last_ok_map[pid + "_ts"] = str(ts or "")
+
+    for p in orphan_posts:
+        if active_counts.get(p.id, 0) > 0:
+            continue
+        last_ok_type = last_ok_map.get(p.id)
         if last_ok_type in pipeline:
             idx = pipeline.index(last_ok_type)
             next_job = pipeline[idx + 1] if idx + 1 < len(pipeline) else JOB_PUBLISH_WP
@@ -7112,6 +7130,37 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                 f"<thead>{thead}</thead><tbody>{body_rows}</tbody></table></div></div>"
                 f"<div id='cnt-{tid}' style='font-size:11px;color:var(--muted);margin-top:5px;min-height:16px'></div>")
 
+    # ── Batch pre-fetch counts and WP integrations for all profiles ──────────
+    _all_pr_ids = [pr.id for pr in all_profiles]
+    # Post counts per profile+status in one query
+    _post_counts: dict[tuple, int] = {}
+    if _all_pr_ids:
+        for row in db.execute(
+            select(Post.profile_id, Post.status, func.count().label("n"))
+            .where(Post.profile_id.in_(_all_pr_ids))
+            .group_by(Post.profile_id, Post.status)
+        ):
+            _post_counts[(row[0], row[1])] = int(row[2])
+    # Job counts per profile+status in one query
+    _job_counts: dict[tuple, int] = {}
+    if _all_pr_ids:
+        for row in db.execute(
+            select(Job.profile_id, Job.status, func.count().label("n"))
+            .where(Job.profile_id.in_(_all_pr_ids))
+            .group_by(Job.profile_id, Job.status)
+        ):
+            _job_counts[(row[0], row[1])] = int(row[2])
+    # WP integrations in one query
+    _wp_integ_map: dict[str, Integration] = {}
+    if _all_pr_ids:
+        for integ in db.scalars(
+            select(Integration).where(
+                Integration.profile_id.in_(_all_pr_ids),
+                Integration.type == IntegrationType.WORDPRESS,
+            )
+        ):
+            _wp_integ_map[integ.profile_id] = integ
+
     # ── Per-bot sections ─────────────────────────────────────────────────────
     bot_sections = ""
     for pr in all_profiles:
@@ -7119,9 +7168,9 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
         pr_name  = html.escape(pr.name)
         pr_id    = html.escape(pr.id)
 
-        # WP domain
+        # WP domain (from pre-fetched map)
         wp_url = ""
-        wp_integ = db.scalar(select(Integration).where(Integration.profile_id == pr.id, Integration.type == IntegrationType.WORDPRESS))
+        wp_integ = _wp_integ_map.get(pr.id)
         if wp_integ:
             try:
                 creds_d = decrypt_json(wp_integ.credentials_encrypted)
@@ -7130,17 +7179,16 @@ def posts_page(request: Request, user: User = Depends(get_current_user), db=Depe
                 pass
         wp_domain = wp_url.replace("https://","").replace("http://","").rstrip("/") if wp_url else ""
 
-        # counts
-        c_pub  = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.completed)) or 0)
-        c_pend_real = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status.in_([PostStatus.pending, PostStatus.processing]))) or 0)
+        # counts (from pre-fetched batch)
+        c_pub  = _post_counts.get((pr.id, PostStatus.completed), 0)
+        c_pend_real = (_post_counts.get((pr.id, PostStatus.pending), 0)
+                       + _post_counts.get((pr.id, PostStatus.processing), 0))
         collect_plan = collect_plan_by_profile.get(pr.id) or {}
         c_pend_planned = int(collect_plan.get("missing") or 0)
         c_pend = c_pend_real + c_pend_planned
-        c_fail = int(db.scalar(select(func.count()).select_from(Post).where(Post.profile_id == pr.id, Post.status == PostStatus.failed)) or 0)
-        _b_qd = int(db.scalar(select(func.count()).select_from(Job).where(
-            Job.profile_id == pr.id, Job.status == JobStatus.queued)) or 0)
-        _b_rj = int(db.scalar(select(func.count()).select_from(Job).where(
-            Job.profile_id == pr.id, Job.status == JobStatus.running)) or 0)
+        c_fail = _post_counts.get((pr.id, PostStatus.failed), 0)
+        _b_qd = _job_counts.get((pr.id, JobStatus.queued), 0)
+        _b_rj = _job_counts.get((pr.id, JobStatus.running), 0)
 
         # load posts per category
         def _load(statuses, limit=200):
