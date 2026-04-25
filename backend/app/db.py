@@ -31,12 +31,21 @@ def _build_engine(raw: str):
             return create_engine(url, future=True, pool_pre_ping=True, connect_args={"ssl_context": ctx})
         return create_engine(url, future=True, pool_pre_ping=True)
     if raw.startswith("sqlite:"):
-        return create_engine(
+        from sqlalchemy import event as _ev
+        _eng = create_engine(
             raw,
             future=True,
             pool_pre_ping=True,
-            connect_args={"check_same_thread": False, "timeout": 30},
+            connect_args={"check_same_thread": False, "timeout": 60},
         )
+        @_ev.listens_for(_eng, "connect")
+        def _set_sqlite_pragmas(conn, _rec):
+            cur = conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute("PRAGMA busy_timeout=60000")
+            cur.close()
+        return _eng
     return create_engine(raw, future=True, pool_pre_ping=True)
 
 

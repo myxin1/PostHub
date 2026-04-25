@@ -217,6 +217,9 @@ def _handle_collect(db, job: Job):
             payload={"collected_content_id": content.id},
             run_at=run_at,
         )
+        # Commit after each item so the write lock is released between scrapes.
+        # profile is re-fetched via db.refresh at next _enqueue_scraped call.
+        db.commit()
         created += 1
 
     def _collect_from_site_rss(*, site_url: str, raw_html: str | None, source_id: str) -> int:
