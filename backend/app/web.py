@@ -555,7 +555,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         if (!ta) return;
         if (sel.value === 'URL') {{
           ta.rows = 3;
-          ta.placeholder = 'https://site.com/receitas/bolos\nhttps://site.com/receitas/tortas\nhttps://site.com/page/2/';
+          ta.placeholder = 'https://site.com/receitas/bolos\\nhttps://site.com/receitas/tortas\\nhttps://site.com/page/2/';
           ta.style.fontFamily = 'monospace';
           if (lbl) lbl.textContent = 'URLs (uma por linha)';
           if (hint) hint.style.display = '';
@@ -986,7 +986,7 @@ def _layout(title: str, body: str, *, user: User | None = None, profile_id: str 
         }} else {{
           card.style.background = 'var(--surface2)';
           card.style.border = '1px solid var(--border)';
-          btnWrap.innerHTML = '<button type="button" class="btn" onclick="openDiagModal(\'' + botId + '\')" style="font-size:13px;padding:8px 18px">&#9658; Iniciar</button>';
+          btnWrap.innerHTML = '<button type="button" class="btn" onclick="openDiagModal(\\'' + botId + '\\')" style="font-size:13px;padding:8px 18px">&#9658; Iniciar</button>';
         }}
       }}
       function _pollBotStatus() {{
