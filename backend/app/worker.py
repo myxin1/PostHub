@@ -1102,6 +1102,14 @@ def _handle_publish_facebook(db, job: Job):
         raise ValueError("post_not_found")
     if post.status != PostStatus.completed or not post.wp_url:
         raise ValueError("post_not_published_wordpress")
+    content = None
+    if post.collected_content_id:
+        content = db.scalar(
+            select(CollectedContent).where(
+                CollectedContent.id == post.collected_content_id,
+                CollectedContent.user_id == job.user_id,
+            )
+        )
     outputs = post.outputs_json or {}
     recipe = outputs.get("recipe") if isinstance(outputs, dict) else None
     fb_text = str((recipe or {}).get("facebook") or "").strip() if isinstance(recipe, dict) else ""
@@ -1149,7 +1157,8 @@ def _handle_publish_facebook(db, job: Job):
     comment_id = None
     if image_mode == "direct_photo":
         # Upload the post image directly as a photo with caption
-        image_url = _get_output_image_url(outputs, fallback_url=content.lead_image_url)
+        fallback_image_url = content.lead_image_url if content else None
+        image_url = _get_output_image_url(outputs, fallback_url=fallback_image_url)
         if image_url:
             caption = fb_text
             if placement == "body":

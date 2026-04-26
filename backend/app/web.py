@@ -3035,17 +3035,17 @@ def robot_diagnose(bot_id: str = Query(default=None), user: User = Depends(get_c
                 invalid_pages.append((_pg.get("name") or _pid) + f" ({_tres.get('error','')[:60]})")
         if invalid_pages and not valid_pages:
             results.append({
-                "key": "facebook", "status": "err",
+                "key": "facebook", "status": "warn",
                 "label": "Token(s) do Facebook inválido(s)",
                 "desc": f"Falha ao validar: {', '.join(invalid_pages[:3])}.",
-                "fix": f"Gere novos tokens em <a href='/app/profiles/{bot.id}?tab=integracoes&itab=facebook'>Integrações → Facebook</a>.",
+                "fix": f"O WordPress pode continuar publicando normalmente. Para voltar a postar no Facebook, gere novos tokens em <a href='/app/profiles/{bot.id}?tab=integracoes&itab=facebook'>Integrações → Facebook</a>.",
             })
         elif invalid_pages:
             results.append({
                 "key": "facebook", "status": "warn",
                 "label": f"Facebook parcialmente OK ({len(valid_pages)} de {len(valid_pages)+len(invalid_pages)} páginas)",
                 "desc": f"Páginas OK: {', '.join(valid_pages[:2])}. Com erro: {', '.join(invalid_pages[:2])}.",
-                "fix": f"Renove os tokens das páginas com erro em <a href='/app/profiles/{bot.id}?tab=integracoes&itab=facebook'>Integrações → Facebook</a>.",
+                "fix": f"O WordPress segue publicando; renove os tokens das páginas com erro em <a href='/app/profiles/{bot.id}?tab=integracoes&itab=facebook'>Integrações → Facebook</a>.",
             })
         else:
             fb_image_mode = str(publish_cfg_diag.get("facebook_image") or "link_preview")
